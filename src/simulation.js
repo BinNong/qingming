@@ -282,10 +282,10 @@ class CityEcology {
    else if(v.cargo>0&&v.nextDelivery<=cycle&&Math.abs(phase-drop)<.30&&Math.hypot(v.cartP[0]-v.delivery[0],v.cartP[1]-v.delivery[1])<4.3){v.serviceKind='delivery';v.remaining=6;v.speedNow=0;v.nextDelivery=cycle+1;}
   }}
  refreshBlockers(){this.trafficBlockers.length=0;for(const v of this.convoys)for(const b of this.convoyBoxes(v))this.trafficBlockers.push(b);if(this.world)this.world.lifeActors=this.trafficBlockers;}
- stepPeople(dt){if(!this.people.length)return;const cell=1.5,grid=new Map();for(const a of this.crowdActors){if(a.crew)continue;const key=Math.floor(a.p[0]/cell)+','+Math.floor(a.p[1]/cell);if(!grid.has(key))grid.set(key,[]);grid.get(key).push(a);}
+ stepPeople(dt){if(!this.people.length)return;const cell=1.5,grid=new Map(),cellKey=(ix,iy)=>(ix+512)*1024+iy+512;for(const a of this.crowdActors){if(a.crew)continue;const key=cellKey(Math.floor(a.p[0]/cell),Math.floor(a.p[1]/cell));let bucket=grid.get(key);if(!bucket)grid.set(key,bucket=[]);bucket.push(a);}
   for(const p of this.people){const a=p.actor,old=[...a.p];let clip='Idle';if(p.wait>0){p.wait=Math.max(0,p.wait-dt);if(p.wait===0){if(p.plan.mode==='porter'){const d=this.docks.find(d=>d.id===p.plan.dock);if(p.direction<0&&p.cargo){d.warehouse+=p.cargo;d.delivered+=p.cargo;p.cargo=0;this.log('porter',d.name+'搬运抵达仓棚');}else if(p.direction>0&&!p.cargo){let n=Math.min(d.inventory,2);d.inventory-=n;p.cargo=n;}}}a.clip=p.plan.mode==='porter'?'Work':'Talk';p.speedNow=0;continue;}
    const aim=p.path.at(p.s+p.direction*.75),dx=aim.p[0]-a.p[0],dy=aim.p[1]-a.p[1],len=Math.hypot(dx,dy)||1;let vx=dx/len,vy=dy/len,sx=0,sy=0,factor=1;
-   const cx=Math.floor(a.p[0]/cell),cy=Math.floor(a.p[1]/cell);for(let ix=cx-1;ix<=cx+1;ix++)for(let iy=cy-1;iy<=cy+1;iy++)for(const b of grid.get(ix+','+iy)||[]){if(a===b||Math.abs(a.p[2]-b.p[2])>1)continue;const xx=a.p[0]-b.p[0],yy=a.p[1]-b.p[1],dd=Math.hypot(xx,yy),range=a.radius+b.radius+.35;if(dd<range&&dd>.001){sx+=xx/dd*(range-dd)*2.2;sy+=yy/dd*(range-dd)*2.2;}}
+   const cx=Math.floor(a.p[0]/cell),cy=Math.floor(a.p[1]/cell);for(let ix=cx-1;ix<=cx+1;ix++)for(let iy=cy-1;iy<=cy+1;iy++)for(const b of grid.get(cellKey(ix,iy))||[]){if(a===b||Math.abs(a.p[2]-b.p[2])>1)continue;const xx=a.p[0]-b.p[0],yy=a.p[1]-b.p[1],dd=Math.hypot(xx,yy),range=a.radius+b.radius+.35;if(dd<range&&dd>.001){sx+=xx/dd*(range-dd)*2.2;sy+=yy/dd*(range-dd)*2.2;}}
    const onCrossing=false,holdCrossing=false;
    for(const b of this.trafficBlockers){if((onCrossing&&!holdCrossing)||Math.abs(b.z-a.p[2])>1.1)continue;const cs=Math.cos(b.angle),sn=Math.sin(b.angle),xx=a.p[0]-b.x,yy=a.p[1]-b.y,lx=xx*cs+yy*sn,ly=-xx*sn+yy*cs,range=b.hx+a.radius+.65;if(Math.abs(ly)<b.hy+1.4&&Math.abs(lx)<range){const side=((a.p[0]>=0?1:-1)*cs)>=0?1:-1,force=(range-Math.abs(lx))*4.1;sx+=cs*side*force;sy+=sn*side*force;factor=Math.min(factor,.70);}}
    if(this.player&&Math.abs(this.player[2]-a.p[2])<1){const xx=a.p[0]-this.player[0],yy=a.p[1]-this.player[1],d=Math.hypot(xx,yy);if(d<1.15&&d>.001){sx+=xx/d*(1.15-d)*2.1;sy+=yy/d*(1.15-d)*2.1;}}
@@ -302,7 +302,19 @@ class CityEcology {
    if(clip!==a.clip){a.oldClip=a.clip;a.clip=clip;a.blend=0;}a.lifeMoving=clip==='Walk'||clip==='Carry';p.state=p.wait>0?'停留':p.plan.mode==='porter'?(p.cargo?'搬货':'返回货埠'):'步行';
   }
  }
- personDynamicClear(a,pos,old){return !this.trafficBlockers.some(b=>{if(Math.abs(b.z-pos[2])>=1)return false;const cs=Math.cos(b.angle),sn=Math.sin(b.angle);const depth=p=>{const x=p[0]-b.x,y=p[1]-b.y,lx=x*cs+y*sn,ly=-x*sn+y*cs;return a.radius+.035-Math.hypot(Math.max(0,Math.abs(lx)-b.hx),Math.max(0,Math.abs(ly)-b.hy));};const d=depth(pos);return d>0&&d>=depth(old)-1e-5;});}
+ // Written as a plain loop rather than some()+closure: this runs once per pedestrian
+ // per fixed step, and the arrow form allocated a depth closure for every blocker.
+ personDynamicClear(a,pos,old){const r=a.radius+.035,ox=pos[0],oy=pos[1],px=old[0],py=old[1];
+  for(const b of this.trafficBlockers){
+   if(Math.abs(b.z-pos[2])>=1)continue;
+   const cs=Math.cos(b.angle),sn=Math.sin(b.angle);
+   const ax=ox-b.x,ay=oy-b.y,lx=ax*cs+ay*sn,ly=-ax*sn+ay*cs;
+   const d=r-Math.hypot(Math.max(0,Math.abs(lx)-b.hx),Math.max(0,Math.abs(ly)-b.hy));
+   if(d<=0)continue;
+   const bx=px-b.x,by=py-b.y,mx=bx*cs+by*sn,my=-bx*sn+by*cs;
+   if(d>=r-Math.hypot(Math.max(0,Math.abs(mx)-b.hx),Math.max(0,Math.abs(my)-b.hy))-1e-5)return false;
+  }
+  return true;}
  snapshot(){return {time:+this.time.toFixed(3),stats:{...this.stats},boats:this.boats.map(b=>({id:b.id,p:[...b.p],heading:b.heading,speed:b.speedNow,state:b.state,dock:b.dock,cargo:b.cargo,s:b.s})),convoys:this.convoys.map(v=>({id:v.id,p:[...v.p],cart:[...v.cartP],s:v.s,speed:v.speedNow,state:v.state,cargo:v.cargo})),people:this.people.map(p=>({name:p.plan.name,p:[...p.actor.p],route:p.plan.route,state:p.state,cargo:p.cargo})),stock:{total:this.totalStock(),initial:this.initialStock,shop:this.shopStock,consumed:this.consumed},docks:this.docks.map(d=>({id:d.id,name:d.name,inventory:d.inventory,warehouse:d.warehouse,occupant:d.occupant})),events:[...this.events]};}
 }
 /** Apply one shared Z-up transform to a vessel and every crew/passenger member. */

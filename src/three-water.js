@@ -48,14 +48,21 @@ export class ThreeRiver extends AdvancedRiver {
   const e=this.engine,async=e.animate&&!e.exporting&&!e.captureSize&&!e.recording&&e.fixedTime===undefined;
   // Both live detail tiers use delayed readback; captures and recording keep exact samples.
   // Keep at most one delayed batch, addressed by boat identity rather than old coordinates.
-  // ponytail: samples may lag by up to 0.25 simulation seconds; refresh synchronously beyond that.
-  if(!async||ids.some(id=>!this.boatSamples.has(id))||Math.abs(time-this.boatSampleTime)>.25){
+  // A synchronous read drains every queued GPU command, so it costs a whole frame of
+  // pipeline: reserve it for the cases that need exactness (cold cache, and a paused or
+  // captured frame) plus an escape hatch for a delayed read that never came back.
+  // Staleness alone is left to the delayed read below, which re-issues on every frame it
+  // is not already in flight, so hulls stay within one frame without the stall.
+  if(!async||ids.some(id=>!this.boatSamples.has(id))||(Math.abs(time-this.boatSampleTime)>1&&!this.pendingQuery)){
    this.pendingQuery=null;store(this.samplePoints(points));
   }else if(!this.pendingQuery){
    const pending={};this.pendingQuery=pending;
+   // r179 leaves PIXEL_PACK_BUFFER bound to the buffer it just deleted; release it on
+   // completion too, or the next synchronous reader fetches from a dead name.
+   const release=()=>this.renderer.getContext().bindBuffer(this.renderer.getContext().PIXEL_PACK_BUFFER,null);
    pending.promise=this.samplePoints(points,{async:true}).then(samples=>{
-    if(this.pendingQuery===pending){store(samples);this.pendingQuery=null;}
-   },error=>{if(this.pendingQuery===pending){this.pendingQuery=null;this.queryError=error;}});
+    release();if(this.pendingQuery===pending){store(samples);this.pendingQuery=null;}
+   },error=>{release();if(this.pendingQuery===pending){this.pendingQuery=null;this.queryError=error;}});
   }
   this.sampleCache.clear();this.sampleRevision=this.cacheRevision();
   boats.forEach((b,i)=>this.boatSamples.get(b.id).forEach((sample,j)=>this.sampleCache.set(this.sampleKey(...points[i*5+j]),sample)));
