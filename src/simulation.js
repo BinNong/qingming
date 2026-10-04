@@ -345,4 +345,108 @@ class LifeBinding {
 }
 
 
-export { V,multiply,identity,invert,transform,Z_TO_Y,world,mix,CollisionWorld,Walker,CrowdSystem,CityEcology,LifeBinding,ArcPath,lifeOBBOverlap,lifeBoatHull };
+// picking.js
+// The channel is the one part of the world no floor covers, so its level and half-width have to
+// restate sampleFloor's own test; a boat's hull rests on the same water line.
+const WATER=.28,CHANNEL=14.25;
+/** Identify what a screen ray points at, in the same Z-up metres the walker uses. A scene
+ * raycast is not an option here: the city is ~17M triangles of InstancedMesh whose visibility is
+ * toggled per frame, so marching the navigation world is both cheaper and consistent with what
+ * the player can actually stand on. */
+function pick(world,origin,dir,ctx={}){
+ const max=ctx.max??170,step=ctx.step??.25,len=Math.hypot(dir[0],dir[1],dir[2]);
+ if(len<1e-9)return null;
+ if(Math.abs(len-1)>1e-6)dir=[dir[0]/len,dir[1]/len,dir[2]/len];   // every distance below assumes a unit ray
+ // Oriented frames are hoisted out of the march: the room records carry no cached cs/sn like the
+ // box and floor records do, so trig per step over 469 buildings costs more than the tests do.
+ // Squared comparisons throughout - Math.hypot dominates the inner loop otherwise.
+ const folk=(ctx.people??[]).filter(a=>!a.crew);
+ const solids=world.rooms.map(r=>({r,c:Math.cos(r.angle),s:Math.sin(r.angle)}));
+ const hulls=(ctx.boats??[]).map(b=>({b,h:lifeBoatHull(b),c:Math.cos(b.heading),s:Math.sin(b.heading),top:b.height*.5+.35}));
+ const carts=(ctx.boxes??[]).map(o=>({o,c:Math.cos(o.angle),s:Math.sin(o.angle)}));
+ let prevZ=origin[2];
+ for(let t=step;t<=max;t+=step){
+  const x=origin[0]+dir[0]*t,y=origin[1]+dir[1]*t,z=origin[2]+dir[2]*t;
+  // Depth-ordered, most specific first. Everything here is a volume test rather than a surface
+  // test, because sampleFloor models floors only: a level ray at a shopfront crosses no floor at
+  // all and would otherwise sail past the building and report the street behind it.
+  for(const a of folk){if(Math.abs(a.p[2]-z)>1)continue;const dx=a.p[0]-x,dy=a.p[1]-y;if(dx*dx+dy*dy<.25)return personHit(a,[x,y,z],t);}
+  // Vessels come before the water: a hull rests on the very plane the ray is about to cross.
+  // Both of these sit ahead of the floor test because the channel has no sampleFloor coverage at
+  // all, so a ray aimed at a boat would otherwise pass through the water and report the far bank.
+  for(const {b,h,c,s,top}of hulls){if(Math.abs(z-.28)>top)continue;const dx=x-h.x,dy=y-h.y,lx=dx*c+dy*s,ly=-dx*s+dy*c;if(Math.abs(lx)<=h.hx&&Math.abs(ly)<=h.hy)return{kind:'boat',point:[x,y,z],distance:t,boat:b};}
+  // Descending through the water line inside the channel is a hit on the river itself. Without
+  // this a click aimed at open water reports nothing at all, because no floor exists there.
+  if(prevZ>WATER&&z<=WATER&&Math.abs(y-lifeRiver(x))<=CHANNEL)return{kind:'water',point:[x,y,WATER],distance:t};
+  for(const {o,c,s}of carts){if(Math.abs(z-o.z)>.95)continue;const dx=x-o.x,dy=y-o.y,lx=dx*c+dy*s,ly=-dx*s+dy*c;if(Math.abs(lx)<=o.hx&&Math.abs(ly)<=o.hy)return{kind:'convoy',point:[x,y,z],distance:t,convoy:o.entity,box:o};}
+  for(const {r,c,s}of solids){if(z<r.lo||z>r.hi)continue;const dx=x-r.x,dy=y-r.y,lx=dx*c+dy*s,ly=-dx*s+dy*c;if(Math.abs(lx)<=r.hx&&Math.abs(ly)<=r.hy)return personAhead(folk,origin,dir,t)??roomHit(world,[x,y,z],t,ctx,r);}
+  // maxZ is the previous sample, never Infinity: sampleFloor assigns the bridge with no
+  // `h>floor` guard, so an unbounded ceiling lets a deck 7m up win over an open-water hull.
+  const f=world.sampleFloor(x,y,prevZ);
+  if(f&&prevZ>f.z&&z<=f.z)return surfaceHit(world,[x,y,f.z],t,ctx,f);
+  prevZ=z;
+ }
+ // A level gaze crosses no floor at all, because the ray never changes height, so a horizon view
+ // over open ground would resolve to nothing. Fall back to the surface under the far end.
+ const fx=origin[0]+dir[0]*max,fy=origin[1]+dir[1]*max,f=world.sampleFloor(fx,fy,origin[2]);
+ return f&&Math.abs(origin[2]-f.z)<2?surfaceHit(world,[fx,fy,f.z],max,ctx,f):null;
+}
+
+const personHit=(actor,point,distance)=>({kind:'person',point,distance,person:actor,lifePlan:actor.lifePlan??null,state:actor.life?.state??null});
+
+/** A shopkeeper is visible through a doorway the solid building volume cannot represent, so the
+ *  volume would swallow them. Probe a short way in before committing to the room. */
+function personAhead(folk,origin,dir,from,span=6){
+ for(let s=.25;s<=span;s+=.25){
+  const t=from+s,x=origin[0]+dir[0]*t,y=origin[1]+dir[1]*t,z=origin[2]+dir[2]*t;
+  for(const a of folk){if(Math.abs(a.p[2]-z)>1)continue;const dx=a.p[0]-x,dy=a.p[1]-y;if(dx*dx+dy*dy<.25)return personHit(a,[x,y,z],t);}
+ }
+ return null;
+}
+
+function roomHit(world,point,distance,ctx,building){
+ const inst=ctx.instances?.get(building.owner),spec=inst?ctx.prefabs?.[inst.prefab]:null;
+ return{kind:'room',point,distance,building,district:inst?.district??null,room:roomIn(spec,building,point)};
+}
+
+/** Only reached when the ray found bare ground, so the door and landmark tests are proximity
+ *  rather than volume: standing in a doorway should report the door, not the street. */
+function surfaceHit(world,point,distance,ctx,floor){
+ const door=world.nearestDoor(point);
+ if(door)return{kind:'door',point,distance,door,label:door.mo.label,open:door.target>.5,surface:floor.tag};
+ const building=world.roomAt(...point);
+ if(building)return roomHit(world,point,distance,ctx,building);
+ let landmark=null,ld=8;
+ for(const p of ctx.landmarks??[]){const d=Math.hypot(p.position[0]-point[0],p.position[1]-point[1]);if(d<ld&&Math.abs(p.position[2]-point[2])<3){ld=d;landmark=p;}}
+ if(landmark)return{kind:'landmark',point,distance,landmark,surface:floor.tag};
+ return{kind:'surface',point,distance,surface:floor.tag};
+}
+
+/** The 37 authored room names have no volume of their own: each `c` is a storey centre at
+ *  plate_z+1.5, and within a storey the rooms partition the footprint along y. Reconstructing
+ *  that one-dimensional split resolves the name exactly, with no distance threshold to tune.
+ *  Anchors sit above every authored floor, so testing against `floors` cannot work. */
+function roomIn(spec,building,point){
+ if(!spec?.rooms?.length)return null;
+ const rows=[];
+ for(const r of spec.rooms){const last=rows[rows.length-1];if(last&&Math.abs(last.z-r.c[2])<.01)last.rooms.push(r);else rows.push({z:r.c[2],rooms:[r]});}
+ const local=transform(invert(building.matrix),point);
+ // Storey bands are anchor +/- 1.5, so the ground and upper bands overlap by 0.1m at the plate.
+ // A hit on the upper plate belongs upstairs, so among containing bands take the highest; only
+ // when no band contains the point does the nearest one apply, which is what lets a click near the
+ // top of a single-storey shopfront still name a room.
+ let row=null;
+ for(const r of rows)if(Math.abs(r.z-local[2])<=1.5&&(!row||r.z>row.z))row=r;
+ if(!row){let best=1.9;for(const r of rows){const d=Math.abs(r.z-local[2]);if(d<=best){best=d;row=r;}}}
+ if(!row)return null;
+ const depth=(spec.depth??0)/2;
+ if(row.rooms.length===1)return Math.abs(local[0])<=spec.width/2?{name:row.rooms[0].name,storey:row.z,cell:[-depth,depth]}:null;
+ row.rooms.sort((a,b)=>a.c[1]-b.c[1]);
+ for(let i=0;i<row.rooms.length;i++){
+  const lo=i?(row.rooms[i-1].c[1]+row.rooms[i].c[1])/2:-depth,hi=i<row.rooms.length-1?(row.rooms[i].c[1]+row.rooms[i+1].c[1])/2:depth;
+  if(local[1]>=lo&&local[1]<hi)return Math.abs(local[0])<=spec.width/2?{name:row.rooms[i].name,storey:row.z,cell:[lo,hi]}:null;
+ }
+ return null;
+}
+
+export { V,multiply,identity,invert,transform,Z_TO_Y,world,mix,CollisionWorld,Walker,CrowdSystem,CityEcology,LifeBinding,ArcPath,lifeOBBOverlap,lifeBoatHull,pick,lifeRiver };

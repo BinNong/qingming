@@ -1,7 +1,7 @@
 // Translate display labels at the UI boundary; simulation IDs and states stay intact.
 const labels={
  '虹桥南 · 开始步行':'South Bridge · Start walking','城门 · 穿城':'City Gate · Walk through','院门 · 寻常人家':'Courtyard · Enter',
- '香铺':'Incense Shop','食铺':'Food Shop','茶肆':'Teahouse','粮铺':'Grain Shop','客舍':'Guesthouse','杂货':'General Store','布庄':'Cloth Shop','药铺':'Apothecary','鱼行':'Fish Market','酒楼':'Tavern',
+ '香铺':'Incense Shop','食铺':'Food Shop','茶肆':'Teahouse','粮铺':'Grain Shop','客舍':'Guesthouse','杂货':'General Store','布庄':'Cloth Shop','药铺':'Apothecary','鱼行':'Fish Market','酒楼':'Tavern','宅院正房':'Main House','民居':'Dwelling','厢房':'Side Room','书斋':'Study',
  ' · 入内':' · Enter','营业厅':' · Main room','起居堂屋':'Living hall','灶间与卧房':'Kitchen and bedroom','后厨与仓储':'Kitchen and storeroom','楼上卧房与书案':'Upstairs bedroom and study',
  '入户门':'front door','楼台门':'balcony door','推开':'Opened ','合上':'Closed ',
  '北岸东货埠':'Northeast Quay','北岸西货埠':'Northwest Quay','南岸东货埠':'Southeast Quay','南岸西货埠':'Southwest Quay',

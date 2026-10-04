@@ -26,3 +26,13 @@ html[lang=en] #walk-location{width:100%;max-width:none}
 html[lang=en] .toggles{grid-template-columns:1fr}
 html[lang=en] #loading h1{font-family:Georgia,"Times New Roman",serif;letter-spacing:1px}
 @media(max-width:700px){html[lang=en] .brand h1{font-size:25px}html[lang=en] .panel{width:min(330px,calc(100vw - 36px))}}
+/* Point-and-look inspection card. Anchored bottom-left so it clears the header, the scene
+   caption and the centred view bar; the overline + h2 pattern is shared with the traffic panel. */
+#inspect-panel{left:28px;right:auto;top:auto;bottom:250px;width:290px;max-height:min(46vh,410px);overflow:auto;padding:16px 18px;z-index:21;background:rgba(244,238,223,.94);border:1px solid rgba(83,71,44,.18);box-shadow:0 15px 45px #2825181a;backdrop-filter:blur(16px)}
+#inspect-panel .eco-heading h2{margin:3px 0 10px;font-size:19px;letter-spacing:.3px}
+#inspect-body{margin-top:2px}
+.inspect-row{display:flex;justify-content:space-between;gap:14px;padding:5px 0;border-top:1px solid #b1a89555;font-size:11px;line-height:1.45}
+.inspect-row:first-child{border-top:0}
+.inspect-row span{color:var(--faint);white-space:nowrap}
+.inspect-row b{font-weight:500;text-align:right;color:var(--ink);overflow-wrap:anywhere}
+@media(max-width:900px){#inspect-panel{left:20px;bottom:244px;width:min(290px,calc(100vw - 40px))}}
