@@ -22,6 +22,10 @@ With the server up, in a second terminal:
 npm run test:package      # verifies runtime assets, GLB hashes, live HTTP endpoints
 ```
 
+`tests/package.mjs` is part of `npm test` and needs those live endpoints, so it starts `server.mjs`
+itself when nothing is listening on `PORT` and kills only what it started. A server you launched
+first is left running.
+
 Run a single test file directly (they are standalone, no test runner):
 
 ```sh

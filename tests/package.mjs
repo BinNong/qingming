@@ -1,8 +1,30 @@
 import assert from 'node:assert/strict';
 import {readFile,stat} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
+import {spawn} from 'node:child_process';
 const root=new URL('../',import.meta.url),base=`http://127.0.0.1:${process.env.PORT||4193}`;
 const read=p=>readFile(new URL(p,root));
+
+// The live-endpoint checks below need server.mjs up. This file used to assume the developer had
+// started it in a second terminal, which is why it was never in `npm test` - and staying out of
+// `npm test` hid a real regression for a whole session (the bilingual document title broke the
+// page smoke check at the bottom). Start a server only if nothing is already listening, so the
+// documented "run it against a running server" workflow still works and still leaves it alone.
+const listening=async()=>fetch(base+'/').then(r=>r.ok).catch(()=>false);
+let stop=()=>{};
+if(!await listening()){
+ const child=spawn(process.execPath,[new URL('server.mjs',root).pathname],{stdio:'ignore'});
+ // unref, or the child handle keeps this process's event loop alive and node never exits. Without
+ // it the run hangs forever and the 'exit' hook below never gets its chance to clean up - which is
+ // how a first attempt at this left an orphaned server running for minutes.
+ child.unref();
+ stop=()=>{if(!child.killed)child.kill();};
+ process.on('exit',stop);
+ for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{stop();process.exit(1);});
+ for(let i=0;i<80&&!await listening();i++)await new Promise(r=>setTimeout(r,250));
+ assert(await listening(),`server.mjs did not come up on ${base}; run it separately or free the port`);
+}
+
 const manifest=JSON.parse(await read('production/asset-manifest.json'));
 const city=JSON.parse(await read('public/runtime/city.json'));
 for(const image of city.images)assert((await stat(new URL('public/runtime/'+image,root))).size>0);
@@ -56,3 +78,4 @@ assert.equal(soa.index.offset+soa.index.count*4,soa.byteLength,'index block ends
 assert.equal(soaManifest.derivedLength,soa.byteLength,'manifest derivedLength matches geometry.byteLength');
 assert.deepEqual(soaManifest.blocks,soa.blocks,'manifest blocks mirror the city.json geometry blocks');
 console.log(JSON.stringify({status:'passed',assetHashes:Object.keys(manifest.outputs).length,localTextures:city.images.length,embeddedVertexColors:true,blenderSources:4,soaGeometry:'soa-v1 verified against manifest',launcher:'START.command',http:'local resources, origin, invalid capture, traversal and missing file checked'},null,2));
+stop(); // a server this file started is not the developer's to leave running
