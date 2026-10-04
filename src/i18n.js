@@ -176,6 +176,15 @@ vesselNo:['{0} 号船','Vessel {0}'],
 enterYes:['可——自街头而入','Yes — walk in from the street'],enterNo:['仅供眺望','Viewpoint only'],
 walkHere:['前往此处','Walk here'],walkHereSec:['场景工坊 ▸ 从此处步行','Scene workshop ▸ Enter location'],
 doorOpen:['开','Open'],doorClosed:['合','Closed'],
+// —— 生成 · 人物白描 ——
+// Chrome only. The generated prose itself never passes through t()/T()/E() - see ai-story.js.
+aiOverline:['其 人','THE PERSON'],aiThinking:['正在看他……','Watching him……'],
+aiAgain:['换一句','Another line'],aiNoKey:['尚未设置 API 密钥','No API key yet'],
+aiFailed:['写不出来','Could not write'],aiRetry:['再试一次','Try again'],
+aiByline:['由模型依数据写成','Written from the scene data'],
+lblApiKey:['API 密钥','API key'],
+aiKeyNote:['密钥只存在本机浏览器，直连 Anthropic，不经任何服务器。','The key stays in this browser and goes straight to Anthropic. No server of ours sees it.'],
+aiCost:['每次约 ¥0.02','About ¥0.02 each'],
 };
 
 /** English-authored enums. Keyed by the raw runtime value; English is the raw value itself. */

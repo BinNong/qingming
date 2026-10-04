@@ -67,3 +67,22 @@ html[lang=zh] #dock-status>div{font-size:12px;line-height:2}
 html[lang=zh] #traffic-events{font-size:11px}
 html[lang=zh] .map-legend{font-size:11px}
 @media(max-width:700px){html[lang=zh] .brand h1{font-size:26px}html[lang=zh] .views button{font-size:12px;padding:9px 10px}html[lang=zh] .scene-caption h2{font-size:21px;letter-spacing:2px}html[lang=zh] .subtitle{letter-spacing:1.5px}}
+/* Generated character portrait. A sibling of #inspect-body, never a child: show() rebuilds that
+   node wholesale every 350ms, so anything nested inside it would be destroyed three times a
+   second. The [hidden] override is required for the same reason as #walk-status - the element's
+   own display would otherwise beat the user-agent [hidden] rule. */
+#inspect-ai[hidden]{display:none}
+#inspect-ai{margin-top:14px;padding-top:13px;border-top:1px solid #b1a89555}
+#inspect-ai .overline{margin:0 0 7px;color:var(--faint);font-size:9px;letter-spacing:2.6px;font-weight:600}
+#ai-desc{margin:0 0 9px;font-size:12.5px;line-height:1.85;color:var(--ink)}
+#ai-line{margin:0 0 10px;padding:8px 11px;border-left:2px solid var(--gold);background:#a78a5514;
+ font-size:12.5px;line-height:1.7;color:var(--ink);font-style:normal}
+#ai-note{margin:8px 0 0;font-size:9px;line-height:1.5}
+#ai-again{margin-top:9px;padding:6px 13px;font-size:11px;background:none;border:1px solid #b1a89580;
+ color:var(--ink);cursor:pointer;transition:background .18s,border-color .18s}
+#ai-again:hover{background:#a78a5518;border-color:var(--gold)}
+#ai-again[hidden]{display:none}
+#qm-key{width:148px;min-width:0;padding:5px 8px;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+ border:1px solid #b1a89580;background:#ffffff5c;color:var(--ink)}
+#qm-key:focus{outline:none;border-color:var(--gold)}
+html[lang=zh] #ai-desc,html[lang=zh] #ai-line{font-size:13.5px;line-height:1.95}

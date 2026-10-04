@@ -13,12 +13,20 @@ export class InspectUI {
   this.canvas=document.querySelector('#world');
   this.panel=document.querySelector('#inspect-panel');
   this.body=document.querySelector('#inspect-body');
+  this.story=hooks.story??null;
   if(!this.panel)return;
-  const nav=engine.data.navigation;
-  this.ctx={boats:engine.life.boats,people:engine.life.crowdActors??[],landmarks:nav.landmarks,docks:engine.data.ecology.docks,
-   water:engine.life.config.water,instances:new Map(nav.instances.map(i=>[i.name,i])),prefabs:nav.prefabs};
+  const nav=engine.data.navigation,eco=engine.data.ecology;
+  this.ctx={boats:engine.life.boats,people:engine.life.crowdActors??[],landmarks:nav.landmarks,docks:eco.docks,
+   water:engine.life.config.water,instances:new Map(nav.instances.map(i=>[i.name,i])),prefabs:nav.prefabs,
+   // The generated portrait reads these two name tables, and only these - the model is told what
+   // the data asserts and nothing else, so it cannot invent a shop the scene does not contain.
+   routes:new Map((eco.routes||[]).map(r=>[r.id,r.name])),
+   docksById:new Map((eco.docks||[]).map(d=>[d.id,d.name]))};
   document.querySelector('#inspect-close').onclick=()=>this.close();
   // An open card is described in whatever language is current, so a switch has to re-render it.
+  // applyLang fires this twice per toggle, and the generated portrait must not spend money on a
+  // language switch either - offer() only calls the API on a cache miss, and zh/en are separate
+  // keys, so switching shows the "no key" or cached state rather than auto-generating.
   onLang(()=>this.show(this.hit));
   this.down=null;
   // A tap, not a drag: app.js owns the orbit/fly gesture on the same canvas, so a click is only a
@@ -49,6 +57,9 @@ export class InspectUI {
   const hit=pick(this.engine.navigation,ray.origin,ray.dir,this.ctx);
   // A click on empty sky would otherwise be indistinguishable from a click that did nothing.
   if(!hit){this.close();this.hooks.toast(t('inspectMiss'));return;}
+  // A click is the only thing that may spend money. show() also runs from the 350ms tick and from
+  // the language toggle, and neither of those should fire a request for a person already read.
+  this.fresh=true;
   this.show(hit);
  }
  show(hit){
@@ -59,8 +70,14 @@ export class InspectUI {
   document.querySelector('#inspect-title').textContent=d.title;
   this.body.innerHTML=d.rows.map(([k,v])=>`<div class="inspect-row"><span>${k}</span><b>${v}</b></div>`).join('');
   this.panel.classList.add('open');
+  // Fired and forgotten: show() is on the 350ms render tick, so awaiting here would stall the card
+  // behind a 20-60s model call. offer() is idempotent, which is what makes calling it here safe.
+  // `fresh` is consumed here, so only the click that opened the card can reach the API - a later
+  // language switch or 350ms tick re-renders from cache or shows the prompt instead.
+  const fresh=this.fresh;this.fresh=false;
+  if(this.story&&hit.kind==='person')this.story.offer(hit,this.ctx,fresh).catch(()=>{});else this.story?.clear();
  }
- close(){this.hit=null;this.panel?.classList.remove('open');}
+ close(){this.hit=null;this.fresh=false;this.story?.clear();this.panel?.classList.remove('open');}
  /** Re-render the open card from the same hit so a boat's speed and a porter's activity stay
   *  current. Pure DOM on the 350ms cadence the traffic panel already uses. */
  update(){
