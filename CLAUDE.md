@@ -34,6 +34,7 @@ node tests/crowd-contracts.mjs  # skinned crowd + ecology parity against the man
 node tests/render-quality.mjs   # water readback, quality tiers, resize/MSAA
 node tests/english.mjs          # no Han characters leak into the English UI
 node tests/i18n.mjs             # bilingual chrome, data values and mesh-id leaks
+node tests/ai-story.mjs         # generated-portrait facts, guards, cache key and DOM contract
 node tests/auto-batches.mjs     # native Auto batching / LOD / culling
 node tests/capture.mjs          # server.mjs capture endpoint
 node tests/web-loader.mjs       # split-SoA loading path
@@ -88,7 +89,7 @@ Blender-authored data is **Z-up**; the world is **Y-up in metres**. The conversi
 - `three-water.js` (`ThreeRiver`) + `advanced-river.js` (`AdvancedRiver`, GLSL) — GPU water: stepping, spray, boat hull sampling via async PBO readback with a synchronous fallback when a read is already in flight.
 - `QingmingStyle.js` / `QingmingPass.js` — the scroll look. Style *converts* materials through `onBeforeCompile` (paper wash, ink lines, grain, relief); the pass renders a second normal/depth channel for outlines.
 - `simulation.js` — engine-independent, Three.js-free core: `CollisionWorld` (floors, doors, grid candidates), `Walker`, `CrowdSystem` (31-joint skinning, clip blending), `CityEcology` (boats, convoys, porter/trade economy, fixed 1/30 s step), `LifeBinding` (writes simulation state into instance attributes), `LandPlanner`, `ArcPath`.
-- `three-materials.js`, `auto-batches.js`, `scene-details.js`, `lod.js`, `ecology-ui.js`, `english.js`, `i18n.js`, `micro.js` (a base64 PNG data module, not logic).
+- `three-materials.js`, `auto-batches.js`, `scene-details.js`, `lod.js`, `ecology-ui.js`, `english.js`, `i18n.js`, `ai-story.js`, `micro.js` (a base64 PNG data module, not logic).
 
 ### Two parallel state systems on the same instances
 
@@ -114,6 +115,21 @@ Two constraints make this fragile, and `tests/i18n.mjs` exists to hold them:
 - **`applyStatic()` assigns `textContent`, which destroys an element's children.** A `data-i18n` therefore belongs on a `<span>` that holds only the caption, never on a `<label>` that also contains a `<select>`; that mistake kills the app on first paint with "Cannot set properties of null".
 
 `data-i18n` marks a text node, `data-i18n-a="aria-label:key,title:key"` marks attributes, and the inline `<head>` script sets `lang` from storage before CSS applies so the CJK face does not flash. JS-built text (view buttons, the walk-site list, the vessel picker) is re-rendered from `onLang` hooks instead. `html[lang=en]` in `style.css` carries the Latin-only type tuning; Chinese overrides sit beside it and the two are mutually exclusive by attribute.
+
+Note that `applyLang()` fires every `onLang` hook **twice** — it calls `setLang()`, which already iterates the callbacks, and then iterates them again. Anything registered there must be idempotent.
+
+## Generated character portraits
+
+`src/ai-story.js` writes a short present-tense description plus one line of dialogue for the person you clicked. The visitor supplies their own key in the tools panel; the call goes browser → Anthropic with `anthropic-dangerous-direct-browser-access: true`, so there is no server and `dist/` stays a pure static bundle. The SDK is not usable here — this repo has no bundler and serves `src/` raw, while the SDK pulls Node-only modules.
+
+Four rules, each of which exists because the obvious alternative is wrong:
+
+- **Generated prose never goes through `t()`/`T()`/`E()`.** `english()` is an unanchored substring table with no word boundaries, so it turns 「八份货物」 into 「八units of cargo」 mid-sentence. `ai-story.js` may import only `t` (for its own chrome labels) and `getLang` from `i18n.js`; `tests/ai-story.mjs` enforces that over the source, not the exports.
+- **The prose node is a sibling of `#inspect-body`, never a child.** `show()` rebuilds that node wholesale every 350ms from `update()`, so anything nested inside it is destroyed three times a second. The test pins the *closing* tag, because an ordering check cannot tell a sibling from a child.
+- **The module never receives the engine.** It cannot reach `shadowDirty` or the render signature, so a stray refresh-on-arrival cannot turn `optimization-browser`'s `settingFrames===1` into 2 with no other symptom.
+- **Only a click spends money.** `show()` also runs from the language toggle and the 350ms tick, so `openAt()` sets a `fresh` flag that `show()` consumes; `offer()` is idempotent and returns early on a cache hit or an in-flight key.
+
+The prompt carries Chinese source values and instructs the output language, because translating facts client-side is lossy for the same reason `english()` is. The system prompt is a byte-stable constant because any interpolation — including a language toggle — silently kills the prompt cache. Cache on `plan.name + lang + state`: `actor.id` is a construction counter that an asset reorder would re-point, and a porter cycles through states, so a name-only key would serve a description of a moment that has passed.
 
 ## Working tree note
 
