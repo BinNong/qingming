@@ -134,7 +134,24 @@ assert.equal(mini.structured,'tool','MiniMax does not document output_config.for
 assert.equal(ants.cache,true,'Anthropic documents prompt caching');
 assert.equal(mini.cache,false,'MiniMax does not document cache_control; sending it would be noise');
 assert.equal(getProvider('nonsense').id,'anthropic','an unknown provider id must fall back, not throw');
-assert.deepEqual(providerList().map(p=>p.id).sort(),['anthropic','minimax']);
+// A provider whose CORS allowlist refuses anthropic-version cannot be reached from a browser at all,
+// so it must not be offered. Offering it produced a raw preflight error in the card and left the
+// reader with no way back but clearing localStorage by hand.
+assert.deepEqual(providerList().map(p=>p.id),['anthropic'],'only browser-reachable providers are offered');
+assert.equal(getProvider('minimax').browser,false,'MiniMax is kept for reference but flagged unreachable');
+// The picker must not advertise anything the reader cannot use. Every option it does offer has to
+// be a browser-reachable provider, so the two lists are checked against each other.
+const pickerHtml=await read('index.html');
+const picker=pickerHtml.slice(pickerHtml.indexOf('id="qm-provider"'));
+const offered=[...picker.slice(0,picker.indexOf('</select>')).matchAll(/value="([^"]+)"/g)].map(m=>m[1]);
+for(const id of offered)assert.equal(getProvider(id).browser,true,`the picker offers ${id}, which cannot be reached from a browser`);
+assert(offered.length>0,'the picker must offer at least one provider');
+assert(!offered.includes('minimax'),'MiniMax must not be offered — its CORS allowlist refuses the Anthropic headers');
+// A stale saved choice must not strand the reader on a provider that cannot be called.
+globalThis.localStorage={getItem:()=>'minimax',setItem(){},removeItem(){}};
+const {readProvider}=await import('../src/ai-story.js');
+assert.equal(readProvider().id,'anthropic','a saved unreachable provider falls back to a working one');
+delete globalThis.localStorage;
 // Anthropic gets a json_schema; MiniMax gets a forced tool call. Neither may carry the other's
 // mechanism, because a provider that ignores an unknown field fails silently rather than loudly.
 for(const [p,mech] of [[ants,'format'],[mini,'tools']]){

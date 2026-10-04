@@ -124,12 +124,14 @@ Note that `applyLang()` fires every `onLang` hook **twice** — it calls `setLan
 
 Two providers are configured, and they differ on exactly the two features this depends on. The capability flags come from each vendor's own compatibility table, not from what happens to work:
 
-| | `output_config.format` | `cache_control` | auth |
-|---|---|---|---|
-| Anthropic (`claude-opus-5-5`) | supported | supported | `x-api-key` |
-| MiniMax (`MiniMax-M3`) | **not documented** | **not documented** | `Authorization: Bearer` |
+| | `output_config.format` | `cache_control` | auth | reachable from a browser |
+|---|---|---|---|---|
+| Anthropic (`claude-opus-5-5`) | supported | supported | `x-api-key` | **yes** |
+| MiniMax (`MiniMax-M3`) | not documented | not documented | `Authorization: Bearer` | **no** |
 
-Both document `output_config.effort`, and both document `tools` / `tool_choice` as fully supported — so the MiniMax path forces the shape through a **tool call** rather than a prompt instruction. That distinction is not theoretical: a live MiniMax call was made with the json_schema and it was silently dropped, producing 16 invented keys including a name and a twelve-year history for a porter who has neither in the data. A prompt instruction would not have saved it. Sending `output_config.format` to a provider that ignores it fails *quietly*, which is why `parseResponse` validates the shape locally and returns `null` rather than rendering whatever arrived. The `system` and `messages` bodies are byte-identical across providers, so only the envelope changes when you switch.
+**MiniMax cannot be called from the browser at all, and this is a server-side fact, not a code problem.** Probing its CORS preflight on 2026-10-04: `access-control-allow-headers` permits `Authorization` and `Content-Type` but refuses both `anthropic-version` and `anthropic-dangerous-direct-browser-access`. The preflight therefore fails and the browser never sends the request. There is no workaround — a request carrying a key as `application/json` is never a "simple request", so the preflight cannot be skipped. Anthropic's preflight returns `access-control-allow-headers: content-type,x-api-key,anthropic-version,anthropic-dangerous-direct-browser-access`, which is why the browser-direct design works there. MiniMax is kept in the table as `browser:false` and excluded from the picker and from `providerList()`; offering it produced a raw CORS message in the card with no way back short of clearing localStorage. Reaching it would need a same-origin proxy, which this static deploy does not have.
+
+Both vendors document `output_config.effort`, and both document `tools` / `tool_choice` as fully supported — so a provider that lacks `output_config.format` forces the shape through a **tool call** rather than a prompt instruction. That distinction is not theoretical: a live MiniMax call made from Node was answered with the json_schema silently dropped, producing 16 invented keys including a name and a twelve-year history for a porter who has neither in the data. A prompt instruction would not have saved it. Sending `output_config.format` to a provider that ignores it fails *quietly*, which is why `parseResponse` validates the shape locally and returns `null` rather than rendering whatever arrived. The `system` and `messages` bodies are byte-identical across providers, so only the envelope changes when you switch.
 
 Four rules, each of which exists because the obvious alternative is wrong:
 

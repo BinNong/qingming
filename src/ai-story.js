@@ -37,13 +37,24 @@ const TIMEOUT_MS=45000;
  *  validated locally either way; a provider that ignores the constraint gets rejected, not trusted. */
 const PROVIDERS={
  anthropic:{id:'anthropic',endpoint:'https://api.anthropic.com/v1/messages',model:'claude-opus-5-5',
-  auth:'x-api-key',structured:'output_config',cache:true},
+  auth:'x-api-key',structured:'output_config',cache:true,browser:true},
+ // Kept, but not offered: MiniMax's CORS allowlist (probed 2026-10-04) permits Authorization and
+ // Content-Type yet refuses both `anthropic-version` and `anthropic-dangerous-direct-browser-access`,
+ // so the preflight fails and the browser never sends the request. There is no workaround - a
+ // request carrying a key as application/json is never a "simple request", so the preflight cannot
+ // be skipped. It is reachable only through a same-origin proxy. Registering it as an option the
+ // reader can pick would only produce a raw CORS message in the panel.
  minimax:{id:'minimax',endpoint:'https://api.minimax.cn/anthropic/v1/messages',model:'MiniMax-M3',
-  auth:'bearer',structured:'tool',cache:false},
+  auth:'bearer',structured:'tool',cache:false,browser:false},
 };
-export const providerList=()=>Object.values(PROVIDERS);
+export const providerList=()=>Object.values(PROVIDERS).filter(p=>p.browser);
 export const getProvider=id=>PROVIDERS[id]||PROVIDERS.anthropic;
-export const readProvider=()=>{try{return getProvider(localStorage.getItem(PROVIDER_STORE));}catch(_){return PROVIDERS.anthropic;}};
+export const readProvider=()=>{try{
+  const p=PROVIDERS[localStorage.getItem(PROVIDER_STORE)];
+  // A provider saved before it was withdrawn must not keep being selected, or the reader is stuck
+  // on a CORS failure with no way back except clearing storage by hand.
+  return p&&p.browser?p:PROVIDERS.anthropic;
+ }catch(_){return PROVIDERS.anthropic;}};
 export const writeProvider=id=>{const p=getProvider(id);try{localStorage.setItem(PROVIDER_STORE,p.id);}catch(_){}};
 
 const ROLE={merchant:'商人',laborer:'劳力',porter:'挑夫',boatman:'舟子',vendor:'摊贩',woman:'妇人',scholar:'学子',guard:'巡城',farmer:'农夫',child:'孩童'};
@@ -220,15 +231,15 @@ export class AIStoryUI{
    const ask=this.variant>1?`\n\n（第 ${this.variant} 次：请换一个完全不同的画面或说法。）`:'';
    const req=buildRequest(provider,{...body,user:body.user+ask},readKey());
    const res=await fetch(req.url,{method:'POST',signal:controller.signal,headers:req.headers,body:req.body});
-   if(!res.ok)throw new Error('HTTP '+res.status);
+   if(!res.ok){const e=new Error('HTTP '+res.status);e.status=res.status;throw e;}
    const result=vet(parseResponse(await res.json()),target.lang);
    if(!result)throw new Error('unusable response');
    if(this.current!==target)return;
    store[target.key]=result;writeCache(store);
    this.paint(result);
-  }catch(_){
+  }catch(err){
    if(this.current!==target)return;
-   this.paint({error:true});
+   this.paint({error:true,why:err?.message||'network'});
   }finally{clearTimeout(timer);if(this.busy===target.key)this.busy=null;if(this.abort===controller)this.abort=null;}
  }
  /** Called on every show(). The identity guard is what stops A's prose sitting under B's name for
@@ -259,7 +270,7 @@ export class AIStoryUI{
    const body=buildMessages(target.facts,lang);
    const req=buildRequest(provider,body,readKey());
    const res=await fetch(req.url,{method:'POST',signal:controller.signal,headers:req.headers,body:req.body});
-   if(!res.ok)throw new Error('HTTP '+res.status);
+   if(!res.ok){const e=new Error('HTTP '+res.status);e.status=res.status;throw e;}
    const payload=await res.json();
    // Whether the prefix actually cleared the cache minimum is an assumption, not a fact, until the
    // API reports it. Exposing it keeps that honest instead of leaving a saving claimed in a comment.
@@ -271,9 +282,9 @@ export class AIStoryUI{
    if(this.current?.key!==key)return;
    const store=cache();store[key]=result;writeCache(store);
    this.paint(result);
-  }catch(_){
+  }catch(err){
    if(this.current?.key!==key)return;
-   this.paint({error:true});
+   this.paint({error:true,why:err?.message||'network'});
   }finally{clearTimeout(timer);if(this.busy===key)this.busy=null;}
  }
  paint(state){
@@ -284,7 +295,12 @@ export class AIStoryUI{
   if(!show)return;
   if(state.pending){say(this.desc,'…');say(this.line,'');say(this.note,t('aiThinking'));this.again.hidden=true;return;}
   if(state.empty){say(this.desc,'');say(this.line,'');say(this.note,t('aiNoKey'));this.again.hidden=true;return;}
-  if(state.error){say(this.desc,'');say(this.line,'');say(this.note,t('aiFailed'));this.again.hidden=false;return;}
+  // A network failure and a bad key look identical without a reason. Saying which one it was costs
+  // nothing and turns "it does not work" into something the reader can act on.
+  if(state.error){const why=String(state.why||'');
+   say(this.desc,'');say(this.line,'');
+   say(this.note,why==='Failed to fetch'?t('aiNoReach'):/^HTTP 40[13]/.test(why)?t('aiKeyBad'):t('aiFailed'));
+   this.again.hidden=false;return;}
   // textContent throughout: the card body is built by innerHTML interpolation, and model output
   // must never share that path.
   say(this.desc,state.description);say(this.line,state.line);
