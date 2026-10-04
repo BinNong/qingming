@@ -199,8 +199,37 @@ export class AIStoryUI{
   this.line=document.querySelector('#ai-line');
   this.note=document.querySelector('#ai-note');
   this.again=document.querySelector('#ai-again');
-  this.key='';this.current=null;this.busy=null;
-  if(this.again)this.again.onclick=()=>this.render(this.current,true);
+  this.key='';this.current=null;this.busy=null;this.variant=0;
+  // "Another line" has to be a *different* request, not the same one again: the prompt is byte-stable
+  // for cache reasons, so a repeat would return the identical prose. The variant rides along as a
+  // user turn rather than in the system prompt, which keeps the cached prefix intact.
+  if(this.again)this.again.onclick=()=>this.again_();
+ }
+ async again_(){
+  const target=this.current;
+  if(!target||this.busy===target.key)return;
+  this.busy=target.key;this.paint({pending:true});
+  const controller=new AbortController();
+  this.abort=controller;
+  const timer=setTimeout(()=>controller.abort(),TIMEOUT_MS);
+  try{
+   this.variant++;
+   const store=cache();delete store[target.key];
+   const provider=readProvider();
+   const body=buildMessages(target.facts,target.lang);
+   const ask=this.variant>1?`\n\n（第 ${this.variant} 次：请换一个完全不同的画面或说法。）`:'';
+   const req=buildRequest(provider,{...body,user:body.user+ask},readKey());
+   const res=await fetch(req.url,{method:'POST',signal:controller.signal,headers:req.headers,body:req.body});
+   if(!res.ok)throw new Error('HTTP '+res.status);
+   const result=vet(parseResponse(await res.json()),target.lang);
+   if(!result)throw new Error('unusable response');
+   if(this.current!==target)return;
+   store[target.key]=result;writeCache(store);
+   this.paint(result);
+  }catch(_){
+   if(this.current!==target)return;
+   this.paint({error:true});
+  }finally{clearTimeout(timer);if(this.busy===target.key)this.busy=null;if(this.abort===controller)this.abort=null;}
  }
  /** Called on every show(). The identity guard is what stops A's prose sitting under B's name for
   *  the two seconds before B resolves. */
@@ -213,7 +242,7 @@ export class AIStoryUI{
   const facts=factsFor(hit,ctx),key=cacheKey(plan,lang,hit.state,readProvider());
   // show() runs on a 350ms tick, so this is called over and over for the same person. Everything
   // below has to be a no-op in that case, or one click becomes a request every 350ms.
-  if(this.current?.key!==key){this.clear();this.current={key,lang,plan,hit,facts,fresh};}
+  if(this.current?.key!==key){this.clear();this.variant=0;this.current={key,lang,plan,hit,facts,fresh};}
   const store=cache();
   if(store[key]){this.paint(vet(store[key],lang));return;}
   if(this.busy===key)return;

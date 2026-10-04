@@ -240,7 +240,20 @@ assert(!/<label[^>]*data-i18n[^>]*>[^<]{0,60}<input/i.test(html),
 assert(/id="qm-key"/.test(html),'the key input exists');
 assert(!/data-i18n="[^"]*"[^>]*>[^<]{0,20}<input[^>]*qm-key/.test(html),'the key input is not inside a data-i18n element');
 
-// 12. Every selector the panel queries must exist, or the whole block silently no-ops - a null
+// 12. Every method the class calls on itself must exist. The "another line" button shipped wired to
+//     this.render(), which was never defined - a click threw TypeError and nothing rendered. The
+//     headless suite cannot click, so this reads the class body and resolves every `this.x(` call.
+const cls=source.slice(source.indexOf('export class AIStoryUI'));
+const defined=new Set([...cls.matchAll(/^\s+(?:async\s+)?([a-zA-Z_$][\w$]*)\s*\(/gm)].map(m=>m[1]));
+for(const called of new Set([...cls.matchAll(/this\.([a-zA-Z_$][\w$]*)\s*\(/g)].map(m=>m[1])))
+ assert(defined.has(called),`AIStoryUI calls this.${called}() but never defines it`);
+// The "another line" path must actually vary the request. A byte-identical prompt returns identical
+// prose, so the button would be a no-op that still charges the reader.
+assert(/variant/.test(cls),'"another line" must vary the request, not repeat it');
+assert(/clear\(\)\{this\.current=null;this\.variant=0;|this\.variant=0/.test(source),
+ 'the variant counter resets when a different person is shown');
+
+// 13. Every selector the panel queries must exist, or the whole block silently no-ops - a null
 // root just returns from paint() and the reader sees an empty card with no error anywhere.
 for(const sel of new Set([...source.matchAll(/querySelector\('(#[a-z-]+)'\)/g)].map(m=>m[1])))
  assert(html.includes(`id="${sel.slice(1)}"`),`ai-story.js queries ${sel} but index.html does not define it`);
