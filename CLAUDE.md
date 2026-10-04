@@ -120,7 +120,16 @@ Note that `applyLang()` fires every `onLang` hook **twice** — it calls `setLan
 
 ## Generated character portraits
 
-`src/ai-story.js` writes a short present-tense description plus one line of dialogue for the person you clicked. The visitor supplies their own key in the tools panel; the call goes browser → Anthropic with `anthropic-dangerous-direct-browser-access: true`, so there is no server and `dist/` stays a pure static bundle. The SDK is not usable here — this repo has no bundler and serves `src/` raw, while the SDK pulls Node-only modules.
+`src/ai-story.js` writes a short present-tense description plus one line of dialogue for the person you clicked. The visitor supplies their own key in the tools panel and picks a provider; the call goes browser → provider with `anthropic-dangerous-direct-browser-access: true`, so there is no server and `dist/` stays a pure static bundle. The SDK is not usable here — this repo has no bundler and serves `src/` raw, while the SDK pulls Node-only modules.
+
+Two providers are configured, and they differ on exactly the two features this depends on. The capability flags come from each vendor's own compatibility table, not from what happens to work:
+
+| | `output_config.format` | `cache_control` | auth |
+|---|---|---|---|
+| Anthropic (`claude-opus-5-5`) | supported | supported | `x-api-key` |
+| MiniMax (`MiniMax-M3`) | **not documented** | **not documented** | `Authorization: Bearer` |
+
+Both document `output_config.effort`, and both document `tools` / `tool_choice` as fully supported — so the MiniMax path forces the shape through a **tool call** rather than a prompt instruction. That distinction is not theoretical: a live MiniMax call was made with the json_schema and it was silently dropped, producing 16 invented keys including a name and a twelve-year history for a porter who has neither in the data. A prompt instruction would not have saved it. Sending `output_config.format` to a provider that ignores it fails *quietly*, which is why `parseResponse` validates the shape locally and returns `null` rather than rendering whatever arrived. The `system` and `messages` bodies are byte-identical across providers, so only the envelope changes when you switch.
 
 Four rules, each of which exists because the obvious alternative is wrong:
 
@@ -128,6 +137,8 @@ Four rules, each of which exists because the obvious alternative is wrong:
 - **The prose node is a sibling of `#inspect-body`, never a child.** `show()` rebuilds that node wholesale every 350ms from `update()`, so anything nested inside it is destroyed three times a second. The test pins the *closing* tag, because an ordering check cannot tell a sibling from a child.
 - **The module never receives the engine.** It cannot reach `shadowDirty` or the render signature, so a stray refresh-on-arrival cannot turn `optimization-browser`'s `settingFrames===1` into 2 with no other symptom.
 - **Only a click spends money.** `show()` also runs from the language toggle and the 350ms tick, so `openAt()` sets a `fresh` flag that `show()` consumes; `offer()` is idempotent and returns early on a cache hit or an in-flight key.
+
+The cache key is `plan.name + lang + state + provider` — the provider is in it because two models write the same person differently, and serving one model's prose under the other's name misrepresents where the words came from.
 
 The prompt carries Chinese source values and instructs the output language, because translating facts client-side is lossy for the same reason `english()` is. The system prompt is a byte-stable constant because any interpolation — including a language toggle — silently kills the prompt cache. Cache on `plan.name + lang + state`: `actor.id` is a construction counter that an asset reorder would re-point, and a porter cycles through states, so a name-only key would serve a description of a moment that has passed.
 

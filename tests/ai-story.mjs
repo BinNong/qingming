@@ -4,7 +4,8 @@ import {execFileSync} from 'node:child_process';
 const root=new URL('../',import.meta.url);
 const read=p=>readFile(new URL(p,root),'utf8');
 const json=async p=>JSON.parse(await read(p));
-const {factsFor,buildMessages,parseResponse,cacheKey,hasHan,leaksMeshId,STORY_SCHEMA,SYSTEM}=await import('../src/ai-story.js');
+const {factsFor,buildMessages,buildRequest,parseResponse,cacheKey,hasHan,leaksMeshId,
+ STORY_SCHEMA,STORY_TOOL,SYSTEM,getProvider,providerList}=await import('../src/ai-story.js');
 const eco=await json('public/runtime/ecology.json'),nav=await json('public/runtime/navigation.json');
 const han=/\p{Script=Han}/u;
 // The same shape tests/i18n.mjs:121 uses. The cards once printed `Handcart__0912` and
@@ -71,11 +72,16 @@ assert.equal(byName.size,584,'plan.name is unique, so the key is a real identity
 assert.equal(langs.size,6,'each citizen in each language gets a distinct key');
 
 // 4. Live state must not be frozen into the cache. A porter cycles 取货 -> 搬货 -> 返回货埠 -> 停留;
-// keying on name alone would serve a description of an instant that has already passed.
+// keying on name alone would serve a description of an instant that has already passed. The
+// provider is in the key too: two models write the same person differently.
 const porter=eco.citizens.find(c=>c.mode==='porter');
 assert(porter,'the ecology has porters to test against');
 const kA=cacheKey(porter,'zh','取货'),kB=cacheKey(porter,'zh','搬货');
 assert.notEqual(kA,kB,'a porter changing activity must not read from the old cache entry');
+assert.notEqual(cacheKey(porter,'zh','搬货',getProvider('anthropic')),cacheKey(porter,'zh','搬货',getProvider('minimax')),
+ 'prose from one model must not be served under another model name');
+assert.equal(cacheKey(porter,'zh','搬货'),cacheKey(porter,'zh','搬货',getProvider('anthropic')),
+ 'an absent provider must default to anthropic rather than producing a distinct key');
 
 // 5. The system prompt is the cacheable prefix, so it has to be byte-identical across every request.
 // Any interpolation - a timestamp, a name, a language - silently invalidates the whole prefix.
@@ -118,7 +124,67 @@ assert.equal(leaksMeshId('Person_porter_0__0599'),true);
 assert.equal(leaksMeshId('南岸西货埠的挑夫'),false);
 assert.equal(leaksMeshId('He hauls cargo at Southwest Quay.'),false);
 
-// 8. parseResponse must never throw and never half-render. Opus 5.5 runs thinking by default, so
+// 8. The provider envelope. This is the part that differs per vendor, and it was written from the
+//    documented compatibility tables rather than from what happened to work: MiniMax supports
+//    output_config.effort but lists neither output_config.format nor cache_control, and a live call
+//    confirmed it - the schema was dropped and the model invented a name and a twelve-year history.
+const ants=getProvider('anthropic'),mini=getProvider('minimax');
+assert.equal(ants.structured,'output_config','Anthropic supports structured outputs');
+assert.equal(mini.structured,'tool','MiniMax does not document output_config.format, so tools force the shape');
+assert.equal(ants.cache,true,'Anthropic documents prompt caching');
+assert.equal(mini.cache,false,'MiniMax does not document cache_control; sending it would be noise');
+assert.equal(getProvider('nonsense').id,'anthropic','an unknown provider id must fall back, not throw');
+assert.deepEqual(providerList().map(p=>p.id).sort(),['anthropic','minimax']);
+// Anthropic gets a json_schema; MiniMax gets a forced tool call. Neither may carry the other's
+// mechanism, because a provider that ignores an unknown field fails silently rather than loudly.
+for(const [p,mech] of [[ants,'format'],[mini,'tools']]){
+ const req=buildRequest(p,buildMessages(factsFor(personHit(porter,'搬货'),ctx),'zh'),'test-key');
+ const sent=JSON.parse(req.body);
+ assert.equal(req.url,p.endpoint);
+ assert.equal(sent.model,p.model);
+ assert.equal(sent.output_config.effort,'low','effort is documented by both providers');
+ assert(sent.output_config.effort!==undefined,'effort must be explicit - MiniMax defaults to max, which is slow and dear');
+ if(mech==='format'){
+  assert(sent.output_config.format,'Anthropic must receive the json_schema');
+  assert(!sent.tools,'Anthropic must not also receive the tool fallback');
+ }else{
+  assert(!sent.output_config.format,'MiniMax must not be sent a field it documents as unsupported');
+  assert.equal(sent.tool_choice.name,STORY_TOOL.name,'the tool must be forced, not merely offered');
+  assert.equal(sent.tools[0].input_schema.additionalProperties,false,'the tool schema must be closed too');
+ }
+ assert.equal(sent.system[0].cache_control===undefined,!p.cache,'cache_control is sent only where supported');
+ assert(sent.messages[0].content,'the facts always reach the model');
+}
+// Auth differs per vendor and getting it wrong is a 401, not a graceful failure.
+const authA=buildRequest(ants,{...buildMessages({},'zh')},'k'),authM=buildRequest(mini,{...buildMessages({},'zh')},'k');
+assert.equal(authA.headers['x-api-key'],'k','Anthropic authenticates with x-api-key');
+assert.equal(authM.headers.authorization,'Bearer k','MiniMax documents Authorization: Bearer');
+assert.equal(authA.headers.authorization,undefined,'Anthropic must not also send a bearer token');
+assert.equal(authA.headers['anthropic-dangerous-direct-browser-access'],'true',
+ 'every browser-originated call needs the CORS opt-in header or it is a 401');
+// The message body must be identical across providers, so a cached prompt survives a switch.
+const bodyA=buildMessages(factsFor(personHit(porter,'搬货'),ctx),'zh'),bodyM=buildMessages(factsFor(personHit(porter,'搬货'),ctx),'zh');
+assert.equal(bodyA.system,bodyM.system,'the cached prefix is provider-independent');
+assert.equal(bodyA.user,bodyM.user);
+
+// 9. The tool-forced path must parse. A provider without output_config answers with a tool_use
+//    block whose input is already an object, so content[0] is never the text we want.
+assert.deepEqual(parseResponse({stop_reason:'tool_use',content:[
+ {type:'tool_use',name:STORY_TOOL.name,input:{description:'他弓着背。',line:'「让让道。」'}}]}),
+ {description:'他弓着背。',line:'「让让道。」'},'a tool_use input is the MiniMax path');
+assert.deepEqual(parseResponse({content:[
+ {type:'tool_use',name:STORY_TOOL.name,input:{description:'a',line:'b'}},{type:'text',text:'ignored'}]}),
+ {description:'a',line:'b'},'tool_use wins when a provider sends both');
+// The invention seen live: a provider that ignored its constraint answers with sixteen keys and no
+// description/line. That must be rejected, never rendered - it is a fabricated name and history.
+const invented={content:[{type:'text',text:JSON.stringify({genre:'市井观察',datetime:'卯时三刻',
+ location:'汴河货埠',name:'陈二牛',gender:'男',appearance:'短褐束腰',action:'正弯腰扛粮',
+ dialogue:'"让一让嘞"',note:'扛了十二年'})}]};
+assert.equal(parseResponse(invented),null,'a non-conforming shape must be rejected, not rendered');
+assert.equal(parseResponse({stop_reason:'tool_use',content:[
+ {type:'tool_use',input:{description:'他弓着背。',name:'陈二牛',age:'十二年'}}]}),null,
+ 'a tool payload that invents fields is still rejected');
+// 10. parseResponse must never throw and never half-render. Opus 5.5 runs thinking by default, so
 // content[0] is a thinking block with empty text - reading index 0 is the classic silent-empty bug.
 const textBlock=b=>({type:'text',text:b});
 assert.deepEqual(parseResponse({content:[textBlock('{"description":"他弓着背。","line":"让让道。"}')]}),
@@ -208,4 +274,6 @@ for(const file of (await readdir(new URL('src/',root))).filter(f=>f.endsWith('js
 // proves nothing either - the honest check is a script over sampled citizens in both languages.
 console.log(JSON.stringify({status:'passed',citizens:eco.citizens.length,factsChecked:'all',withRoute,
  namedExcluded:named.length,guards:['han','meshId'],parseNeverThrows:true,cacheKey:'plan.name+lang+state',
- prefixStable:true,checksInBrowser:'not asserted - derived 39 vs documented 42, needs a browser',network:'not exercised - no credentials in this environment'},null,2));
+ prefixStable:true,providers:providerList().map(p=>p.id+':'+p.structured),mechanisms:['output_config','tool'],
+ checksInBrowser:'not asserted - derived 39 vs documented 42, needs a browser',
+ network:'no live call here. A MiniMax endpoint was probed once on 2026-10-04: 200 OK, output_config.format silently dropped, tools path untested.'},null,2));

@@ -14,14 +14,37 @@ import {getLang,t} from './i18n.js';
  *    wholesale every 350ms, which would destroy async text three times a second. */
 
 const KEY_STORE='qm-key';
-const ENDPOINT='https://api.anthropic.com/v1/messages';
-const MODEL='claude-opus-5-5';
-// Opus 5.5's thinking cannot be turned off, and it bills against max_tokens, so this has to cover
-// reasoning plus the ~200 visible tokens. A 200-token budget truncates the reply mid-JSON.
+const PROVIDER_STORE='qm-provider';
+// Anthropic 5.5's thinking cannot be turned off and it bills against max_tokens, so this has to
+// cover reasoning plus the ~200 visible tokens. A 200-token budget truncates the reply mid-JSON.
 const MAX_TOKENS=2048;
 // An Opus call with thinking runs 20-60s and browser fetch has no timeout of its own, so without
 // this a dropped connection leaves the panel spinning forever.
 const TIMEOUT_MS=45000;
+
+/** Provider capabilities, from each vendor's own compatibility table rather than from what happens
+ *  to work. They differ on exactly the two features this feature depends on:
+ *
+ *  - Anthropic supports `output_config.format` (structured outputs) and prompt caching.
+ *  - MiniMax's documented table supports `output_config.effort` but lists neither
+ *    `output_config.format` nor `cache_control`. A live call confirmed it: the schema was silently
+ *    dropped and the model answered with 16 invented keys, including a name and a twelve-year
+ *    history for a porter who has neither in the data.
+ *  - MiniMax fully supports `tools` and `tool_choice`, so that is the fallback that actually forces
+ *    a shape - a prompt instruction alone is what produced the invention above.
+ *
+ *  `structured` therefore picks the mechanism, not whether the output is checked. The response is
+ *  validated locally either way; a provider that ignores the constraint gets rejected, not trusted. */
+const PROVIDERS={
+ anthropic:{id:'anthropic',endpoint:'https://api.anthropic.com/v1/messages',model:'claude-opus-5-5',
+  auth:'x-api-key',structured:'output_config',cache:true},
+ minimax:{id:'minimax',endpoint:'https://api.minimax.cn/anthropic/v1/messages',model:'MiniMax-M3',
+  auth:'bearer',structured:'tool',cache:false},
+};
+export const providerList=()=>Object.values(PROVIDERS);
+export const getProvider=id=>PROVIDERS[id]||PROVIDERS.anthropic;
+export const readProvider=()=>{try{return getProvider(localStorage.getItem(PROVIDER_STORE));}catch(_){return PROVIDERS.anthropic;}};
+export const writeProvider=id=>{const p=getProvider(id);try{localStorage.setItem(PROVIDER_STORE,p.id);}catch(_){}};
 
 const ROLE={merchant:'商人',laborer:'劳力',porter:'挑夫',boatman:'舟子',vendor:'摊贩',woman:'妇人',scholar:'学子',guard:'巡城',farmer:'农夫',child:'孩童'};
 const MODE={crew:'舟员',traveller:'行旅',resident:'居家',seated:'闲坐',shopkeeper:'看店',porter:'脚夫'};
@@ -88,29 +111,68 @@ export function factsFor(hit,ctx){
 const LABEL={role:'行当',mode:'身份',age:'年纪',posture:'身段',doing:'正在',route:'往来路线',dock:'货埠'};
 const lines=f=>Object.entries(f).map(([k,v])=>`${LABEL[k]||k}：${v}`).join('\n');
 
+/** The tool the schema-less path forces. MiniMax documents `tools` and `tool_choice` as fully
+ *  supported, so this is the mechanism that actually constrains the shape there - a prompt
+ *  instruction is what let the model answer with sixteen invented keys. */
+export const STORY_TOOL={name:'write_portrait',description:'写出这个人的白描与一句话。',
+ input_schema:STORY_SCHEMA};
+
 export function buildMessages(facts,lang){
  return{lang,system:SYSTEM[lang==='en'?'en':'zh'],user:lines(facts),
-  schema:STORY_SCHEMA,model:MODEL,max_tokens:MAX_TOKENS};
+  schema:STORY_SCHEMA,max_tokens:MAX_TOKENS};
+}
+
+/** Assemble the wire request for a provider. Kept separate from buildMessages so the message
+ *  content is identical across providers and only the envelope differs - that is what lets a
+ *  cached prompt be reused when the visitor switches. */
+export function buildRequest(provider,body,key){
+ const headers={'content-type':'application/json','anthropic-version':'2023-06-01',
+  // Required on any browser-originated call; without it the API answers 401.
+  'anthropic-dangerous-direct-browser-access':'true'};
+ headers[provider.auth==='bearer'?'authorization':'x-api-key']=provider.auth==='bearer'?'Bearer '+key:key;
+ const system=[{type:'text',text:body.system}];
+ // Only where prompt caching is actually supported. Sending cache_control to a provider that
+ // documents it as ignored is noise; sending it to one that errors on it would break the call.
+ if(provider.cache)system[0].cache_control={type:'ephemeral'};
+ const payload={model:provider.model,max_tokens:body.max_tokens,system,
+  messages:[{role:'user',content:body.user}],output_config:{effort:'low'}};
+ if(provider.structured==='output_config')payload.output_config.format={type:'json_schema',schema:body.schema};
+ else{payload.tools=[STORY_TOOL];payload.tool_choice={type:'tool',name:STORY_TOOL.name};}
+ return{url:provider.endpoint,headers,body:JSON.stringify(payload)};
 }
 
 /** plan.name is the identity - unique across all 584 and authored in the data, unlike actor.id,
  *  which is a construction counter that any asset reordering would silently re-point. The live
  *  state rides along because a porter cycles 取货 -> 搬货 -> 返回货埠 and a frozen "he is carrying"
  *  outlives the moment it described. */
-export function cacheKey(plan,lang,state){return[plan?.name,lang,state||''].join('|');}
+export function cacheKey(plan,lang,state,provider){return[plan?.name,lang,state||'',provider?.id||'anthropic'].join('|');}
 
 export const hasHan=s=>HAN.test(String(s??''));
 export const leaksMeshId=s=>MESH_ID.test(String(s??''))||INSTANCE_SUFFIX.test(String(s??''));
 
 /** Returns null for anything it cannot fully trust, so the caller renders a retry rather than a
- *  half-answered card. Never throws. The text block is found by type: with thinking on, content[0]
- *  is a thinking block whose text is empty by default. */
+ *  half-answered card. Never throws.
+ *
+ *  Two shapes are read. A provider with `output_config.format` answers with a text block holding
+ *  JSON; a provider forced through `tools` answers with a tool_use block whose input is already an
+ *  object. Both are then held to the same two-field contract, because a provider that ignored its
+ *  constraint has to be rejected rather than rendered - that is exactly the case where the model
+ *  invents a name and a twelve-year history for a porter who has neither in the data.
+ *
+ *  The text block is found by type, never by index: with thinking on, content[0] is a thinking
+ *  block whose text is empty by default. */
 export function parseResponse(json){
  try{
   if(!json||json.stop_reason==='refusal'||json.stop_reason==='max_tokens')return null;
-  const block=(json.content||[]).find(b=>b?.type==='text');
-  if(!block?.text)return null;
-  const parsed=JSON.parse(block.text);
+  const blocks=json.content||[];
+  const tool=blocks.find(b=>b?.type==='tool_use');
+  let parsed=null;
+  if(tool?.input&&typeof tool.input==='object')parsed=tool.input;
+  else{
+   const block=blocks.find(b=>b?.type==='text');
+   if(!block?.text)return null;
+   parsed=JSON.parse(block.text);
+  }
   if(typeof parsed?.description!=='string'||typeof parsed?.line!=='string')return null;
   if(!parsed.description.trim()||!parsed.line.trim())return null;
   return{description:parsed.description.trim(),line:parsed.line.trim()};
@@ -148,7 +210,7 @@ export class AIStoryUI{
   if(!this.root)return;
   if(hit?.kind!=='person'||!hit.lifePlan){this.clear();return;}
   const lang=getLang()==='en'?'en':'zh',plan=hit.lifePlan;
-  const facts=factsFor(hit,ctx),key=cacheKey(plan,lang,hit.state);
+  const facts=factsFor(hit,ctx),key=cacheKey(plan,lang,hit.state,readProvider());
   // show() runs on a 350ms tick, so this is called over and over for the same person. Everything
   // below has to be a no-op in that case, or one click becomes a request every 350ms.
   if(this.current?.key!==key){this.clear();this.current={key,lang,plan,hit,facts,fresh};}
@@ -164,17 +226,10 @@ export class AIStoryUI{
   const controller=new AbortController();
   const timer=setTimeout(()=>controller.abort(),TIMEOUT_MS);
   try{
+   const provider=readProvider();
    const body=buildMessages(target.facts,lang);
-   const res=await fetch(ENDPOINT,{method:'POST',signal:controller.signal,headers:{
-    'content-type':'application/json','x-api-key':readKey(),
-    'anthropic-version':'2023-06-01',
-    // Without this header the API answers 401 to any browser-originated request.
-    'anthropic-dangerous-direct-browser-access':'true'},
-    body:JSON.stringify({model:body.model,max_tokens:body.max_tokens,
-     // Byte-stable across every request; any interpolation here silently kills the cache.
-     system:[{type:'text',text:body.system,cache_control:{type:'ephemeral'}}],
-     messages:[{role:'user',content:body.user}],
-     output_config:{effort:'low',format:{type:'json_schema',schema:body.schema}}})});
+   const req=buildRequest(provider,body,readKey());
+   const res=await fetch(req.url,{method:'POST',signal:controller.signal,headers:req.headers,body:req.body});
    if(!res.ok)throw new Error('HTTP '+res.status);
    const payload=await res.json();
    // Whether the prefix actually cleared the cache minimum is an assumption, not a fact, until the

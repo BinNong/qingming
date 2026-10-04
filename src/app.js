@@ -4,7 +4,7 @@ import {V,world,mix,Walker} from './simulation.js';
 import {loadCity} from './loader.js';
 import {EcologyUI} from './ecology-ui.js';
 import {InspectUI} from './inspect.js';
-import {AIStoryUI,readKey,writeKey} from './ai-story.js';
+import {AIStoryUI,readKey,writeKey,readProvider,writeProvider} from './ai-story.js';
 import {ThreeCityEngine} from './three-engine.js';
 
 
@@ -47,8 +47,9 @@ $('#lang-btn').textContent=getLang()==='zh'?'EN':'中';
 $('#lang-btn').onclick=()=>{applyLang(getLang()==='zh'?'en':'zh');$('#lang-btn').textContent=getLang()==='zh'?'EN':'中';};
 $('#tools-btn').onclick=()=>$('#tools').classList.toggle('open');
 // The visitor's own key, kept in localStorage like the language choice. It is sent straight to
-// Anthropic from the browser and never touches this repository or any server of ours.
-$('#qm-key').value=readKey();$('#qm-key').onchange=e=>{writeKey(e.target.value);toast(t('aiKeyNote'));};$('#fullscreen').onclick=async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen();}catch{toast(t('toastFull'));}};
+// the selected provider from the browser and never touches this repository or any server of ours.
+$('#qm-key').value=readKey();$('#qm-key').onchange=e=>{writeKey(e.target.value);toast(t('aiKeyNote'));};
+$('#qm-provider').value=readProvider().id;$('#qm-provider').onchange=e=>{writeProvider(e.target.value);inspectUI?.close();toast(t('aiKeyNote'));};$('#fullscreen').onclick=async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen();}catch{toast(t('toastFull'));}};
 $('#pixel-ratio').onchange=e=>{if(!engine)return;engine.maxPixelRatio=e.target.value==='native'?Infinity:+e.target.value;engine.resize();};$('#quality').onchange=e=>{engine?.setQuality(e.target.value);toast(e.target.selectedOptions[0].textContent);};$('#sun').oninput=e=>{const h=+e.target.value;$('#hour').textContent=String(Math.floor(h)).padStart(2,'0')+':'+String(Math.round((h%1)*60)).padStart(2,'0');if(engine){engine.sunHour=h;engine.shadowDirty=true;}};$('#ink').oninput=e=>{engine&&(engine.ink=+e.target.value);$('#ink-value').textContent=Math.round(+e.target.value*100)+'%';engine?.style.set({enabled:+e.target.value});};$('#motion').onchange=e=>{engine&&(engine.animate=e.target.checked);};document.querySelectorAll('[data-layer]').forEach(el=>el.onchange=()=>{if(engine){el.checked?engine.hidden.delete(el.dataset.layer):engine.hidden.add(el.dataset.layer);engine.shadowDirty=true;}});
 async function saveShot(){
  if(transition){camera=transition.to;transition=null;}engine.captureSize=[3840,2160];engine.render(camera,engine.clockLast);

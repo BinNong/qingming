@@ -183,7 +183,8 @@ aiAgain:['换一句','Another line'],aiNoKey:['尚未设置 API 密钥','No API 
 aiFailed:['写不出来','Could not write'],aiRetry:['再试一次','Try again'],
 aiByline:['由模型依数据写成','Written from the scene data'],
 lblApiKey:['API 密钥','API key'],
-aiKeyNote:['密钥只存在本机浏览器，直连 Anthropic，不经任何服务器。','The key stays in this browser and goes straight to Anthropic. No server of ours sees it.'],
+lblProvider:['模型服务','Model service'],
+aiKeyNote:['密钥只存在本机浏览器，直连所选服务商，不经任何服务器。','The key stays in this browser and goes straight to the service you pick. No server of ours sees it.'],
 aiCost:['每次约 ¥0.02','About ¥0.02 each'],
 };
 
