@@ -29,6 +29,7 @@ node tests/contracts.mjs        # collision, navigation, ecology, material/style
 node tests/crowd-contracts.mjs  # skinned crowd + ecology parity against the manifests
 node tests/render-quality.mjs   # water readback, quality tiers, resize/MSAA
 node tests/english.mjs          # no Han characters leak into the English UI
+node tests/i18n.mjs             # bilingual chrome, data values and mesh-id leaks
 node tests/auto-batches.mjs     # native Auto batching / LOD / culling
 node tests/capture.mjs          # server.mjs capture endpoint
 node tests/web-loader.mjs       # split-SoA loading path
@@ -83,7 +84,7 @@ Blender-authored data is **Z-up**; the world is **Y-up in metres**. The conversi
 - `three-water.js` (`ThreeRiver`) + `advanced-river.js` (`AdvancedRiver`, GLSL) — GPU water: stepping, spray, boat hull sampling via async PBO readback with a synchronous fallback when a read is already in flight.
 - `QingmingStyle.js` / `QingmingPass.js` — the scroll look. Style *converts* materials through `onBeforeCompile` (paper wash, ink lines, grain, relief); the pass renders a second normal/depth channel for outlines.
 - `simulation.js` — engine-independent, Three.js-free core: `CollisionWorld` (floors, doors, grid candidates), `Walker`, `CrowdSystem` (31-joint skinning, clip blending), `CityEcology` (boats, convoys, porter/trade economy, fixed 1/30 s step), `LifeBinding` (writes simulation state into instance attributes), `LandPlanner`, `ArcPath`.
-- `three-materials.js`, `auto-batches.js`, `scene-details.js`, `lod.js`, `ecology-ui.js`, `english.js`, `micro.js` (a base64 PNG data module, not logic).
+- `three-materials.js`, `auto-batches.js`, `scene-details.js`, `lod.js`, `ecology-ui.js`, `english.js`, `i18n.js`, `micro.js` (a base64 PNG data module, not logic).
 
 ### Two parallel state systems on the same instances
 
@@ -101,7 +102,14 @@ Static file server plus the capture sink. `POST /capture/...` only accepts a har
 
 The code is written in an extremely dense style — multi-statement lines, semicolon-joined, minimal whitespace, comments only where a non-obvious constraint exists. **Match the surrounding density** when editing these files; a reformatted block is a bad diff. Comments in this repo explain *why* a workaround is needed (e.g. the r179 depth-material state workaround, the light-layer trick that keeps the water pass from compiling a second program variant) — preserve that intent.
 
-The UI is English-only; `src/english.js` maps the Chinese-authored navigation/ecology names, and `tests/english.mjs` fails if any Han character reaches the interface.
+The UI is bilingual, Chinese by default, toggled from the header. `src/i18n.js` owns the switch: every table row is a `[zh, en]` pair, and the choice persists in `localStorage` under `qm-lang`. Three resolulers, because the data has three provenances — `t()` for hard-coded chrome, `T()` for values the JSON authors wrote in Chinese (their raw value is the zh side; `english()` is the en side), and `E()` for enums authored in English (a zh lookup table; the raw value is the en side). `src/english.js` is only the `T()` half now.
+
+Two constraints make this fragile, and `tests/i18n.mjs` exists to hold them:
+
+- **`t()` falls through to its raw argument on a missing key.** That is invisible in English — the argument is usually already English — and only shows up as an untranslated id elsewhere. The card once printed the literal word `bridge` this way.
+- **`applyStatic()` assigns `textContent`, which destroys an element's children.** A `data-i18n` therefore belongs on a `<span>` that holds only the caption, never on a `<label>` that also contains a `<select>`; that mistake kills the app on first paint with "Cannot set properties of null".
+
+`data-i18n` marks a text node, `data-i18n-a="aria-label:key,title:key"` marks attributes, and the inline `<head>` script sets `lang` from storage before CSS applies so the CJK face does not flash. JS-built text (view buttons, the walk-site list, the vessel picker) is re-rendered from `onLang` hooks instead. `html[lang=en]` in `style.css` carries the Latin-only type tuning; Chinese overrides sit beside it and the two are mutually exclusive by attribute.
 
 ## Working tree note
 

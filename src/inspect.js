@@ -1,5 +1,5 @@
 import {V,pick} from './simulation.js';
-import {english} from './english.js';
+import {t,T,E,district,asset,onLang} from './i18n.js';
 
 /** Navigation space is Z-up; the scene is Y-up. This is the inverse of world() in simulation.js. */
 const toNav=w=>[w[0],-w[2],w[1]];
@@ -18,6 +18,8 @@ export class InspectUI {
   this.ctx={boats:engine.life.boats,people:engine.life.crowdActors??[],landmarks:nav.landmarks,docks:engine.data.ecology.docks,
    water:engine.life.config.water,instances:new Map(nav.instances.map(i=>[i.name,i])),prefabs:nav.prefabs};
   document.querySelector('#inspect-close').onclick=()=>this.close();
+  // An open card is described in whatever language is current, so a switch has to re-render it.
+  onLang(()=>this.show(this.hit));
   this.down=null;
   // A tap, not a drag: app.js owns the orbit/fly gesture on the same canvas, so a click is only a
   // click if the pointer barely moved and was never a second finger.
@@ -46,7 +48,7 @@ export class InspectUI {
   this.ctx.boxes=this.engine.life.convoys.flatMap(v=>this.engine.life.convoyBoxes(v));
   const hit=pick(this.engine.navigation,ray.origin,ray.dir,this.ctx);
   // A click on empty sky would otherwise be indistinguishable from a click that did nothing.
-  if(!hit){this.close();this.hooks.toast('Nothing there — click the street, the water, a boat or a person.');return;}
+  if(!hit){this.close();this.hooks.toast(t('inspectMiss'));return;}
   this.show(hit);
  }
  show(hit){
@@ -68,51 +70,56 @@ export class InspectUI {
  }
 }
 
-const title=s=>s.charAt(0).toUpperCase()+s.slice(1);
-const num=(v,d=1)=>Number(v).toFixed(d);
-/** District ids are authored as `04_Riverside_commerce`; show the readable half. */
-const district=d=>d?d.replace(/^\d+_/,'').replace(/_/g,' '):null;
+/** Numbers carry their unit through the same pair table, so "0.28 m" and "0.28 米" both come out
+ *  of one call. The English-only sentence-case helper is gone: it had nothing to do in Chinese. */
+const unit=(key,v,d=2)=>Number(v).toFixed(d)+t(key);
 
 function describe(hit,ctx){
  switch(hit.kind){
   case 'water':{const w=ctx.water,underway=ctx.boats.filter(b=>b.speedNow>.05).length;
-   return{overline:'THE RIVER',title:'Bianjing Water',rows:[
-    ['Surface level',`${num(w.level,2)} m`],['Current',`${num(w.current,2)} m/s`],
-    ['Swell',`${Math.round(w.waveStrength*100)}% of full`],['Wake memory',`${w.wakeLife} frames`],
-    ['Vessels under way',`${underway} of ${ctx.boats.length}`]]};}
+   return{overline:t('olRiver'),title:t('waterTitle'),rows:[
+    [t('rSurface'),unit('suffixM',w.level)],[t('rCurrent'),unit('suffixMS',w.current)],
+    [t('rSwell'),t('suffixPct',Math.round(w.waveStrength*100))],[t('rWake'),w.wakeLife+t('suffixFrames')],
+    [t('rUnderway'),underway+t('suffixOf')+ctx.boats.length]]};}
   case 'boat':{const b=hit.boat,dock=b.dock&&ctx.docks.find(d=>d.id===b.dock);
-   return{overline:'RIVER TRAFFIC',title:english(b.type),rows:[
-    ['Vessel',english(b.name)],['State',english(b.state)],['Speed',`${num(b.speedNow,2)} m/s`],
-    ['Cargo',`${b.cargo} units`],['Quay',dock?english(dock.name):'Passing through'],
-    ['Mast clearance',english(b.rigClearancePolicy||'—')],
-    ['Clearance checks',`${b.clearanceSamples} sampled · ${b.clearanceFailures} failed`]]};}
+   // b.name is `Vessel_02_Cargo_barge` - an asset instance id, not a vessel name. The number is
+   // what the traffic panel already calls this boat, so that is what the card shows.
+   return{overline:t('olTraffic'),title:E(b.type),rows:[
+    [t('rVessel'),t('vesselNo',b.id+1)],[t('rState'),T(b.state)],[t('rSpeed'),unit('suffixMS',b.speedNow)],
+    [t('rCargo'),b.cargo+t('suffixUnit')],[t('rQuay'),dock?T(dock.name):t('passingThrough')],
+    [t('rMast'),E(b.rigClearancePolicy||'—')],
+    [t('rClearance'),t('mastSamples',b.clearanceSamples,b.clearanceFailures)]]};}
   case 'convoy':{const v=hit.convoy;
-   return{overline:'ROAD FREIGHT',title:`Convoy ${v.id+1}`,rows:[
-    ['Cart',v.cart],['Animal',v.animal],['State',english(v.state)],['Speed',`${num(v.speedNow,2)} m/s`],
-    ['Cargo',`${v.cargo} units`],['Depot',`Warehouse ${v.station}`],['Distance',`${num(v.distance/1000,2)} km`]]};}
-  case 'person':{const plan=hit.lifePlan??{},mode=plan.mode==='crew'?'RIVER CREW':'STREET LIFE';
-   return{overline:mode,title:title(plan.role||'Citizen'),rows:[
-    ['Occupation',title(plan.role||'—')],['Role',title(plan.mode||'—')],
-    ['Activity',hit.state?english(hit.state):'Standing'],
-    ['Gesture',title(plan.clip||'Idle')],['Name',plan.name||'—']]};}
+   return{overline:t('olFreight'),title:t('convoyTitle',v.id+1),rows:[
+    [t('rCart'),asset(v.cart)],[t('rAnimal'),asset(v.animal)],[t('rState'),T(v.state)],[t('rSpeed'),unit('suffixMS',v.speedNow)],
+    [t('rCargo'),v.cargo+t('suffixUnit')],[t('rDepot'),t('warehouse',v.station)],[t('rDistance'),unit('suffixKm',v.distance/1000)]]};}
+  case 'person':{const plan=hit.lifePlan??{},crew=plan.mode==='crew';
+   // No Name row: every citizen's `name` is a placement id (Person_merchant_0__0674), never a
+   // personal name, so the field only ever printed a mesh id under a "Name" heading.
+   return{overline:t(crew?'olCrew':'olStreet'),title:plan.role?E(plan.role):t('citizen'),rows:[
+    [t('rOccupation'),plan.role?E(plan.role):t('citizen')],[t('rPosition'),plan.mode?E(plan.mode):t('citizen')],
+    [t('rActivity'),hit.state?T(hit.state):t('standing')],
+    [t('rGesture'),E(plan.clip||'Idle')]]};}
   case 'room':{const b=hit.building,room=hit.room;
-   return{overline:hit.district?district(hit.district).toUpperCase():'BUILDING',
-    title:room?english(room.name):english(b.name),rows:[
-    [room?'Building':'Precinct',english(b.name)],['Storeys',String(b.stories)],
-    ['Floor',room?title(room.storey>4?'upper storey':'ground floor'):'—'],
-    ['District',district(hit.district)||'—']]};}
+   return{overline:(hit.district?district(hit.district):t('olBuilding')).toUpperCase(),
+    title:room?T(room.name):T(b.name),rows:[
+    [room?t('rBuilding'):t('rPrecinct'),T(b.name)],[t('rStoreys'),String(b.stories)],
+    [t('rFloor'),room?t(room.storey>4?'walkUp':'walkDown'):'—'],
+    [t('rDistrict'),district(hit.district)||'—']]};}
   case 'door':{const d=hit.door;
-   return{overline:'DOOR',title:title(english(d.mo.label)),rows:[
-    ['State',hit.open?'Open':'Closed'],['Building',english(d.a.name)],['Handle','E']]};}
-  case 'landmark':return{overline:'LANDMARK',title:english(hit.landmark.name),rows:[
-    ['Enterable',hit.landmark.inside?'Yes — walk in from the street':'Viewpoint only'],
-    ['Ground level',`${num(hit.point[2],2)} m`],['Walk here','Scene workshop ▸ Enter location']]};
+   return{overline:t('olDoor'),title:T(d.mo.label),rows:[
+    [t('rState'),t(hit.open?'doorOpen':'doorClosed')],[t('rBuilding'),T(d.a.name)],[t('pressKey'),'E']]};}
+  case 'landmark':return{overline:t('olLand'),title:T(hit.landmark.name),rows:[
+    [t('rEnterable'),t(hit.landmark.inside?'enterYes':'enterNo')],[t('rGround'),unit('suffixM',hit.point[2])],
+    [t('walkHere'),t('walkHereSec')]]};
   default:{const s=hit.surface,plain=s==='bridge'||s==='stairs'||s==='ground';
    // A tag that is neither ground, bridge nor stairs is the instance that owns the floor, so name
-   // the building rather than leaking a mesh id into the card.
+   // the building rather than leaking a mesh id into the card. The three plain tags are ids too -
+   // the row printed the raw word 'bridge' before - so each needs its own label.
    const inst=plain?null:ctx.instances.get(s),kind=inst?ctx.prefabs?.[inst.prefab]?.kind:null;
-   return{overline:'TERRAIN',title:s==='bridge'?'Hongqiao bridge':s==='stairs'?'Stairs':s==='ground'?'Street':kind?english(kind):'Threshold',
-    rows:[['Surface',plain?(s==='ground'?'Street level':s):'Building floor'],['Ground level',`${num(hit.point[2],2)} m`],
-     ...(inst?[['District',district(inst.district)||'—']]:[])]};}
+   const SURFACE={ground:'surfPlain',bridge:'surfBridgeDeck',stairs:'surfStairRun'};
+   return{overline:t('olTerrain'),title:s==='bridge'?t('surfBridge'):s==='stairs'?t('surfStairs'):s==='ground'?t('surfStreet'):kind?T(kind):t('surfThreshold'),
+    rows:[[t('rSurfaceKind'),plain?t(SURFACE[s]||'surfStreet'):t('surfFloor')],[t('rGround'),unit('suffixM',hit.point[2])],
+     ...(inst?[[t('rDistrict'),district(inst.district)||'—']]:[])]};}
  }
 }

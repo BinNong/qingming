@@ -36,3 +36,34 @@ html[lang=en] #loading h1{font-family:Georgia,"Times New Roman",serif;letter-spa
 .inspect-row span{color:var(--faint);white-space:nowrap}
 .inspect-row b{font-weight:500;text-align:right;color:var(--ink);overflow-wrap:anywhere}
 @media(max-width:900px){#inspect-panel{left:20px;bottom:244px;width:min(290px,calc(100vw - 40px))}}
+
+/* Language toggle. Shares .icon-btn's geometry but sets its own font: the CJK face is much wider
+   than a glyph icon, and a serif face at icon size renders 中 as a full-bleed block. */
+#lang-btn{font-family:Georgia,"Times New Roman",serif;font-size:14px;letter-spacing:.5px;padding:0;line-height:1}
+html[lang=zh] #lang-btn{font-family:"Songti SC","Noto Serif CJK SC",serif;font-size:16px}
+/* CJK needs far less tracking than the Latin display type above, or the letters stop forming words. */
+html[lang=zh] .overline,html[lang=zh] .chapter span,html[lang=zh] .tag{letter-spacing:.8px}
+html[lang=zh] .brand h1{font-size:33px;letter-spacing:5px}
+html[lang=zh] .subtitle{letter-spacing:3px}
+html[lang=zh] .scene-caption h2{font-size:24px;letter-spacing:3px}
+html[lang=zh] .scene-caption p{letter-spacing:1.2px;line-height:1.7;max-width:520px}
+html[lang=zh] .views button{font-size:13px;letter-spacing:1.5px;padding:10px 12px}
+html[lang=zh] .mode{letter-spacing:1.5px}
+html[lang=zh] .panel h2{letter-spacing:3px}
+html[lang=zh] #instructions,html[lang=zh] #scene-stats{letter-spacing:.4px}
+html[lang=zh] .inspect-row{font-size:12px}
+html[lang=zh] .inspect-row span{letter-spacing:1px}
+/* The 1.1px/low-tracking tuning above assumes Latin; Chinese panels are denser so give them back
+   the same room the English-only build had. */
+html[lang=zh] .panel label{font-size:13px}
+/* A four-character caption plus a 150px select does not fit the English-width panel, and the
+   caption used to break mid-word. Pin the caption to one line and let the select take the rest. */
+html[lang=zh] .panel label>span{white-space:nowrap;flex:1 1 auto}
+html[lang=zh] .panel select{font-size:12px;width:148px;min-width:0;flex:0 0 auto}
+html[lang=zh] .toggles{grid-template-columns:1fr 1fr}
+html[lang=zh] .toggles label{font-size:12px}
+html[lang=zh] .eco-time,html[lang=zh] #life-summary,html[lang=zh] #follow-status,html[lang=zh] #life-ledger{font-size:12px}
+html[lang=zh] #dock-status>div{font-size:12px;line-height:2}
+html[lang=zh] #traffic-events{font-size:11px}
+html[lang=zh] .map-legend{font-size:11px}
+@media(max-width:700px){html[lang=zh] .brand h1{font-size:26px}html[lang=zh] .views button{font-size:12px;padding:9px 10px}html[lang=zh] .scene-caption h2{font-size:21px;letter-spacing:2px}html[lang=zh] .subtitle{letter-spacing:1.5px}}
