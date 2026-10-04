@@ -7,6 +7,11 @@
 *.pem
 *.key
 
+# Harness settings hold a live ANTHROPIC_AUTH_TOKEN in plaintext. The whole directory is ignored
+# rather than just that file, so a settings.local.json or a new credential file cannot slip in
+# through `git add -A`.
+.claude/
+
 # Dependencies and caches
 node_modules/
 __pycache__/
