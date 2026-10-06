@@ -6,7 +6,26 @@
 
 /* Living river inspection panel */
 #ecosystem-panel{right:28px;top:116px;width:330px;max-height:calc(100vh - 230px);overflow:auto;padding:18px;z-index:20;background:rgba(244,238,223,.94);border:1px solid rgba(83,71,44,.18);box-shadow:0 15px 45px #2825181a;backdrop-filter:blur(16px)}
-#tools{z-index:25;max-height:calc(100vh - 220px);overflow:auto}.eco-heading{display:flex;justify-content:space-between;align-items:center}.eco-heading h2{margin:4px 0 12px}.eco-heading .icon-btn{width:28px;height:28px}.eco-time{display:flex;justify-content:space-between;font-size:12px;color:#736650;border-top:1px solid #b8aa8a80;padding-top:10px}.eco-time strong{font-family:monospace;letter-spacing:.12em;color:#355d59}#life-summary,#follow-status,#life-ledger{font-size:11px;line-height:1.7;color:#655c48;margin:9px 0}#traffic-map{display:block;width:100%;height:auto;border:1px solid #baac8d66;border-radius:3px}.map-legend{font-size:10px;text-align:center;color:#79745e;margin:7px 0 12px}.eco-actions{display:flex;gap:7px;margin-top:9px}.eco-actions button{flex:1;border:1px solid #aa9b7d55;padding:8px 3px;background:#fff9;color:#63533e;border-radius:3px;cursor:pointer}.eco-actions button:first-child{background:#335f58;color:#f5efda}#dock-status{border-top:1px solid #b9ab8c55;padding-top:8px;margin-top:10px}#dock-status>div{display:flex;justify-content:space-between;font-size:11px;line-height:1.9;color:#685f4d}#traffic-events{font-size:10px;line-height:1.8;color:#807259}#traffic-events time{font-family:monospace;color:#38645c}#ecosystem-panel label{font-size:12px}.hide-ui #ecosystem-panel{display:none!important}@media(max-width:1000px){#ecosystem-panel{width:278px;right:16px;top:100px}.scene-caption{max-width:52%}}@media(max-width:700px){#ecosystem-panel{display:none}#ecosystem-panel.open{display:block;width:270px;top:100px;max-height:calc(100vh - 205px)}.top-actions .tag{display:none}}
+#tools{z-index:25;max-height:calc(100vh - 220px);overflow:auto}.eco-heading{display:flex;justify-content:space-between;align-items:center}.eco-heading h2{margin:4px 0 12px}.eco-heading .icon-btn{width:28px;height:28px}.eco-time{display:flex;justify-content:space-between;font-size:12px;color:#736650;border-top:1px solid #b8aa8a80;padding-top:10px}.eco-time strong{font-family:monospace;letter-spacing:.12em;color:#355d59}#life-summary,#follow-status,#life-ledger{font-size:11px;line-height:1.7;color:#655c48;margin:9px 0}#traffic-map{display:block;width:100%;height:auto;border:1px solid #baac8d66;border-radius:3px}.map-legend{font-size:10px;text-align:center;color:#79745e;margin:7px 0 12px}
+/* The map key and the ledger, both rebuilt from ecology.json rather than authored in the markup.
+   Two columns because the names are short (南岸西市集 is five characters) and the panel is 250px;
+   one per line made the key taller than the map it explains. */
+#route-legend{margin:0 0 12px}
+.legend-group{border-top:1px solid #b9ab8c55;padding:7px 0 3px}
+.legend-group:first-child{border-top:0;padding-top:0}
+.legend-head{display:flex;align-items:center;gap:6px;margin:0 0 4px;font-size:11px;color:var(--ink)}
+.legend-head i{flex:0 0 auto;width:10px;height:2px;display:block}
+.legend-head em{margin-left:auto;font-style:normal;font-size:9px;color:var(--faint)}
+/* Two columns, because the key measured 374px on one column and pushed 跟随此船 / 自由视角 - the
+   panel's primary controls - below the fold. The longest name is 14 characters, about 140px, so
+   two 150px columns hold every one of them. */
+.legend-names{columns:2;column-gap:10px;padding-left:16px}
+.legend-name{margin:0 0 2px;font-size:10px;line-height:1.5;color:#6c6350;break-inside:avoid}
+#life-stats{border-top:1px solid #b9ab8c55;margin-top:9px;padding-top:8px}
+.stat-group{margin:0 0 8px}
+.stat-head{margin:0 0 3px;font-size:9px;letter-spacing:1.7px;color:#8a7f66}
+.stat-row{display:flex;justify-content:space-between;gap:10px;font-size:10px;line-height:1.7;color:#6c6350}
+.stat-row b{font-weight:500;color:var(--ink)}.eco-actions{display:flex;gap:7px;margin-top:9px}.eco-actions button{flex:1;border:1px solid #aa9b7d55;padding:8px 3px;background:#fff9;color:#63533e;border-radius:3px;cursor:pointer}.eco-actions button:first-child{background:#335f58;color:#f5efda}#dock-status{border-top:1px solid #b9ab8c55;padding-top:8px;margin-top:10px}#dock-status>div{display:flex;justify-content:space-between;font-size:11px;line-height:1.9;color:#685f4d}#traffic-events{font-size:10px;line-height:1.8;color:#807259}#traffic-events time{font-family:monospace;color:#38645c}#ecosystem-panel label{font-size:12px}.hide-ui #ecosystem-panel{display:none!important}@media(max-width:1000px){#ecosystem-panel{width:278px;right:16px;top:100px}.scene-caption{max-width:52%}}@media(max-width:700px){#ecosystem-panel{display:none}#ecosystem-panel.open{display:block;width:270px;top:100px;max-height:calc(100vh - 205px)}.top-actions .tag{display:none}}
 
 #capture-dialog{width:min(1100px,90vw);background:#e7dcc4;border:1px solid #897456;color:#403722}#capture-dialog::backdrop{background:#181813b8}#capture-dialog img{display:block;width:100%;margin-top:14px}#capture-dialog a{margin-left:22px}#verification{position:fixed;z-index:100;left:16px;top:150px;max-height:60vh;max-width:600px;overflow:auto;background:#f3ebd9;padding:15px;font:12px monospace}.view-nav{width:min(1260px,calc(100vw - 40px));max-width:calc(100vw - 40px)}.views{min-width:0;flex:1;flex-wrap:nowrap;overflow-x:auto;justify-content:flex-start}.view-nav .mode,.nav-separator{flex-shrink:0}@media(max-width:600px){.view-nav{flex-wrap:wrap}.views{flex-basis:100%}.nav-separator{display:none}.view-nav .mode{flex:1}.scene-caption{bottom:156px}}#tools{max-height:calc(100vh - 120px);overflow:auto}
 
@@ -72,17 +91,49 @@ html[lang=zh] .map-legend{font-size:11px}
    second. The [hidden] override is required for the same reason as #walk-status - the element's
    own display would otherwise beat the user-agent [hidden] rule. */
 #inspect-ai[hidden]{display:none}
-#inspect-ai{margin-top:14px;padding-top:13px;border-top:1px solid #b1a89555}
-#inspect-ai .overline{margin:0 0 7px;color:var(--faint);font-size:9px;letter-spacing:2.6px;font-weight:600}
-#ai-desc{margin:0 0 9px;font-size:12.5px;line-height:1.85;color:var(--ink)}
-#ai-line{margin:0 0 10px;padding:8px 11px;border-left:2px solid var(--gold);background:#a78a5514;
- font-size:12.5px;line-height:1.7;color:var(--ink);font-style:normal}
-#ai-note{margin:8px 0 0;font-size:9px;line-height:1.5}
-#ai-again{margin-top:9px;padding:6px 13px;font-size:11px;background:none;border:1px solid #b1a89580;
+#inspect-ai{margin-top:16px;padding-top:14px;border-top:1px solid #b1a89555}
+#inspect-ai .overline{display:flex;align-items:center;gap:9px;margin:0 0 10px;color:var(--faint);font-size:9px;letter-spacing:2.6px;font-weight:600;white-space:nowrap}
+#inspect-ai .overline::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,#b1a89566,transparent)}
+/* The prose is the scroll's own voice, so it takes the inscription face rather than the UI sans;
+   Latin gets Georgia, the same pairing the brand and scene caption use. */
+#ai-desc{margin:0 0 11px;font-family:Georgia,"Times New Roman",serif;font-size:13px;line-height:1.8;color:#2b271e}
+#ai-line{margin:0 0 12px;padding:9px 12px;border-left:3px double var(--gold);background:#a78a5512;
+ font-family:Georgia,"Times New Roman",serif;font-size:13px;line-height:1.75;color:#3d3423}
+#ai-line[hidden]{display:none}
+#ai-make{width:100%;margin:2px 0 10px;padding:9px;background:#4a4837;color:#f0e5d0;border:none;font-size:12px;
+ letter-spacing:2px;cursor:pointer;transition:background .18s}
+#ai-make:hover{background:#5b5844}
+#ai-make[hidden]{display:none}
+#ai-foot{display:flex;align-items:center;justify-content:space-between;gap:12px}
+#ai-note{margin:0;font-size:9px;line-height:1.5;flex:1 1 auto}
+#ai-again{flex:0 0 auto;padding:6px 13px;font-size:11px;background:none;border:1px solid #b1a89580;
  color:var(--ink);cursor:pointer;transition:background .18s,border-color .18s}
 #ai-again:hover{background:#a78a5518;border-color:var(--gold)}
 #ai-again[hidden]{display:none}
-#qm-key{width:148px;min-width:0;padding:5px 8px;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+#ai-cancel{flex:0 0 auto;padding:6px 2px;background:none;border:none;color:var(--faint);font-size:10px;cursor:pointer}
+#ai-cancel:hover{color:var(--red)}
+#ai-cancel[hidden]{display:none}
+#qm-key,#qm-url{width:148px;min-width:0;padding:5px 8px;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
  border:1px solid #b1a89580;background:#ffffff5c;color:var(--ink)}
-#qm-key:focus{outline:none;border-color:var(--gold)}
-html[lang=zh] #ai-desc,html[lang=zh] #ai-line{font-size:13.5px;line-height:1.95}
+#qm-key:focus,#qm-url:focus{outline:none;border-color:var(--gold)}
+html[lang=zh] #ai-desc,html[lang=zh] #ai-line{font-family:"Songti SC","Noto Serif CJK SC","STSong",serif;font-size:14px;line-height:2.05}
+html[lang=zh] #ai-desc{text-align:justify;text-justify:inter-ideograph}
+/* The cursor readout. z-index 26 because #tools is 25 and this is repositioned under the cursor,
+   which can cross any of the panels. The [hidden] override is required for the same reason as
+   #walk-status and #inspect-ai: the element's own display would otherwise beat the user-agent
+   [hidden] rule and it would never go away. Warm paper rather than #toast's dark or
+   #walk-status's HUD grey - it carries the same values as the card and should read as part of
+   it, not as a system message. */
+#hover-readout{position:absolute;z-index:26;max-width:280px;padding:7px 11px;pointer-events:none;
+ background:rgba(244,238,223,.94);border:1px solid rgba(83,71,44,.18);box-shadow:0 6px 20px #2825181a;
+ backdrop-filter:blur(10px);font-size:11px;line-height:1.5;color:var(--ink);white-space:nowrap}
+#hover-readout[hidden]{display:none}
+html[lang=zh] #hover-readout{font-size:12px;letter-spacing:.6px}
+/* Sibling of #inspect-body, not a child: show() rebuilds that node wholesale every 350ms, so a
+   button inside it would be destroyed three times a second. The [hidden] override is the same one
+   #walk-status and #inspect-ai need - the element's own display beats the user-agent rule. */
+#inspect-follow{margin-top:12px}
+#inspect-follow[hidden]{display:none}
+#follow-person{width:100%;padding:9px;border:1px solid #aa9b7d55;background:#fff9;color:#63533e;border-radius:3px;cursor:pointer;font-size:12px}
+#follow-person:hover{background:#f0e8d8}
+#inspect-follow.on #follow-person{background:#335f58;color:#f5efda;border-color:#335f88}

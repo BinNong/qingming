@@ -29,6 +29,10 @@ venv/
 /output/
 /evidence/
 
+# Browser-harness scratch: snapshots, traces and screenshots land in the working directory
+.playwright-cli/
+qm-*.png
+
 # Runtime assets and authoritative production inputs are intentionally tracked.
 
 # Reproducible web deployment output

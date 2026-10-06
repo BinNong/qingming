@@ -1,6 +1,12 @@
 // Translate display labels at the UI boundary; simulation IDs and states stay intact.
 const labels={
  '虹桥南 · 开始步行':'South Bridge · Start walking','城门 · 穿城':'City Gate · Walk through','院门 · 寻常人家':'Courtyard · Enter',
+ // The same three landmarks with the "· 入内" instruction stripped. factsFor() emits the bare form
+ // as a `place` - the suffix is a UI instruction the model has no business seeing - and the rows
+ // above only cover the whole string, so without these the bare form renders as raw Han in English.
+ // Harmless today because `place` only ever reaches the prompt, not the DOM; it becomes a leak the
+ // moment anything routes it through T(). The alternation is longest-first, so these never shadow.
+ '虹桥南':'South Bridge','城门':'City Gate','院门':'Courtyard Gate',
  '香铺':'Incense Shop','食铺':'Food Shop','茶肆':'Teahouse','粮铺':'Grain Shop','客舍':'Guesthouse','杂货':'General Store','布庄':'Cloth Shop','药铺':'Apothecary','鱼行':'Fish Market','酒楼':'Tavern','宅院正房':'Main House','民居':'Dwelling','厢房':'Side Room','书斋':'Study',
  ' · 入内':' · Enter','营业厅':' · Main room','起居堂屋':'Living hall','灶间与卧房':'Kitchen and bedroom','后厨与仓储':'Kitchen and storeroom','楼上卧房与书案':'Upstairs bedroom and study',
  '入户门':'front door','楼台门':'balcony door','推开':'Opened ','合上':'Closed ',

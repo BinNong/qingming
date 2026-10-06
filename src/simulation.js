@@ -349,6 +349,13 @@ class LifeBinding {
 // The channel is the one part of the world no floor covers, so its level and half-width have to
 // restate sampleFloor's own test; a boat's hull rests on the same water line.
 const WATER=.28,CHANNEL=14.25;
+/** A person is a body, not a 1m band around the floor they stand on. `a.p[2]` is their feet, and
+ *  the walker's own eye is 1.6m above that floor, so a level crosshair lands on the figure's chest
+ *  - above the old band, which resolved the street behind them and printed a bridge deck where the
+ *  reader had pointed at a pedestrian. Orbit never showed it: from above the ray descends into the
+ *  band. 1.70 is the same body height the crowd's own move options and canOccupy() use. */
+const BODY=1.70,UNDERFOOT=.5;
+const offBody=(a,z)=>z>a.p[2]+BODY*(a.scale?.[2]??1)||z<a.p[2]-UNDERFOOT;
 /** Identify what a screen ray points at, in the same Z-up metres the walker uses. A scene
  * raycast is not an option here: the city is ~17M triangles of InstancedMesh whose visibility is
  * toggled per frame, so marching the navigation world is both cheaper and consistent with what
@@ -370,7 +377,7 @@ function pick(world,origin,dir,ctx={}){
   // Depth-ordered, most specific first. Everything here is a volume test rather than a surface
   // test, because sampleFloor models floors only: a level ray at a shopfront crosses no floor at
   // all and would otherwise sail past the building and report the street behind it.
-  for(const a of folk){if(Math.abs(a.p[2]-z)>1)continue;const dx=a.p[0]-x,dy=a.p[1]-y;if(dx*dx+dy*dy<.25)return personHit(a,[x,y,z],t);}
+  for(const a of folk){if(offBody(a,z))continue;const dx=a.p[0]-x,dy=a.p[1]-y;if(dx*dx+dy*dy<.25)return personHit(a,[x,y,z],t);}
   // Vessels come before the water: a hull rests on the very plane the ray is about to cross.
   // Both of these sit ahead of the floor test because the channel has no sampleFloor coverage at
   // all, so a ray aimed at a boat would otherwise pass through the water and report the far bank.
@@ -399,7 +406,7 @@ const personHit=(actor,point,distance)=>({kind:'person',point,distance,person:ac
 function personAhead(folk,origin,dir,from,span=6){
  for(let s=.25;s<=span;s+=.25){
   const t=from+s,x=origin[0]+dir[0]*t,y=origin[1]+dir[1]*t,z=origin[2]+dir[2]*t;
-  for(const a of folk){if(Math.abs(a.p[2]-z)>1)continue;const dx=a.p[0]-x,dy=a.p[1]-y;if(dx*dx+dy*dy<.25)return personHit(a,[x,y,z],t);}
+  for(const a of folk){if(offBody(a,z))continue;const dx=a.p[0]-x,dy=a.p[1]-y;if(dx*dx+dy*dy<.25)return personHit(a,[x,y,z],t);}
  }
  return null;
 }
@@ -449,4 +456,13 @@ function roomIn(spec,building,point){
  return null;
 }
 
-export { V,multiply,identity,invert,transform,Z_TO_Y,world,mix,CollisionWorld,Walker,CrowdSystem,CityEcology,LifeBinding,ArcPath,lifeOBBOverlap,lifeBoatHull,pick,lifeRiver };
+export { V,multiply,identity,invert,transform,Z_TO_Y,world,mix,CollisionWorld,Walker,CrowdSystem,CityEcology,LifeBinding,ArcPath,lifeOBBOverlap,lifeBoatHull,pick,lifeRiver,personHit };
+
+/** The forward vector for a followed subject, in navigation space. Each kind stores its heading
+ *  differently and none of the three agree: a boat takes atan2(dir[1],dir[0]), a convoy takes the
+ *  nav heading where x runs across the street, and an actor takes atan2(dx,-dy) from its own
+ *  movement (simulation.js:193). Person and convoy differ by a quarter turn, so copying the wrong
+ *  one puts the camera 90 degrees off and still produces a plausible-looking shot. Exported so
+ *  tests/inspect-card.mjs can pin all three against each other. */
+export const followForward=(kind,heading)=>kind==='boat'?[Math.cos(heading),Math.sin(heading)]
+ :kind==='person'?[Math.cos(heading),-Math.sin(heading)]:[Math.sin(heading),-Math.cos(heading)];

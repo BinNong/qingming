@@ -66,6 +66,11 @@ setLang('en');assert.equal(t('convoyTitle',3),'Convoy 3');
 const han=/\p{Script=Han}/u;
 const shown=[
  ...nav.landmarks.map(l=>l.name),
+ // ...and the same landmarks with the "· 入内" instruction stripped. english.js carried rows for
+ // the whole strings only, so 虹桥南/城门/院门 rendered as raw Han in English - invisible here,
+ // because the stripped form appears nowhere on disk and tests/english.mjs only reads JSON. It is
+ // derived from the data instead, so the next landmark that needs stripping is covered for free.
+ ...nav.landmarks.map(l=>String(l.name).split('·')[0].trim()).filter(Boolean),
  ...Object.values(nav.prefabs).flatMap(p=>(p.rooms??[]).map(r=>r.name)),
  ...Object.values(nav.prefabs).map(p=>p.kind),
  ...[...new Set(nav.instances.map(i=>i.district))],
@@ -73,6 +78,9 @@ const shown=[
  ...eco.boats.map(b=>b.rigClearancePolicy),
  ...[...new Set(eco.convoys.map(v=>v.state))],...eco.docks.map(d=>d.name),
  ...[...new Set(eco.citizens.map(c=>c.role))],[...new Set(eco.citizens.map(c=>c.mode))],
+ // The route names the generated portrait puts in front of the model. They are only in english.js
+ // because of a hand-written row each, and a new route added to ecology.json would leak silently.
+ ...eco.routes.map(r=>r.name).filter(Boolean),
 ];
 setLang('en');
 for(const value of shown){if(!value)continue;assert(!han.test(T(value)),`English view leaks Han: ${value}`);assert(!han.test(E(value)),`English enum leaks Han: ${value}`);}

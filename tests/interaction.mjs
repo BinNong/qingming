@@ -88,6 +88,27 @@ assert.equal(personHit?.kind,'person','a person inside the room must outrank the
 assert.equal(personHit.lifePlan.role,'vendor');
 ctx.people=[];
 
+// --- A level ray at eye height must hit the person in front of it. `a.p[2]` is the floor under a
+// figure's feet, and the walker's eye is 1.6m above that, so a cursor or crosshair on their chest
+// fires a level ray 1.6m up - the old ±1m band around the feet sat below it. Walking therefore
+// picked the street behind every pedestrian and the card showed a bridge deck with nobody on it.
+// Orbit looked down into the band, which is why only walking ever showed it.
+const street=world.sampleFloor(-4.3,-40,12).z,EYE=street+1.6;
+assert.notEqual(pick(world,[-4.3,-40,EYE],[0,1,0],{...ctx,people:[]})?.kind,'person','an empty street at eye height is not a person');
+ctx.people=[{p:[-4.3,-36,street],scale:[1,1,1],crew:false,lifePlan:{role:'laborer',mode:'resident',clip:'Idle'},life:null}];
+const chest=pick(world,[-4.3,-40,EYE],[0,1,0],ctx);
+assert.equal(chest?.kind,'person',`a level eye-height ray must hit the figure 4m ahead, got ${chest?.kind}`);
+assert.equal(chest.lifePlan.role,'laborer');
+ctx.people=[];
+
+// --- The body is a body, and it still stops at a floor. A figure down on the water is not picked
+// through the bridge deck above them, which is the case that widening the band could have broken.
+const span=world.sampleFloor(0,-8,12).z;
+assert(span>4,'the bridge must arch well above the water for this to mean anything');
+ctx.people=[{p:[0,-8,.28],scale:[1,1,1],crew:false,lifePlan:null,life:null}];
+assert.notEqual(pick(world,[0,-8,span+6],[0,0,-1],ctx)?.kind,'person','a figure below must not be hit through a solid floor');
+ctx.people=[];
+
 // --- Bare ground under a landmark reports the landmark.
 const poi=nav.landmarks[0];
 const lm=pick(world,[poi.position[0]-10,poi.position[1],poi.position[2]+1.2],[1,0,0],ctx);

@@ -21,6 +21,22 @@ const server=http.createServer(async(req,res)=>{
    await mkdir(path.dirname(path.join(root,'evidence',capture[1])),{recursive:true});
    await writeFile(path.join(root,'evidence',capture[1]),data);res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({path:'evidence/'+capture[1],bytes}));return;
   }
+  // Dev-only egress for providers whose own CORS allowlist refuses the browser headers (MiniMax,
+  // probed 2026-10-04 - see CLAUDE.md). Same-origin, so no preflight exists at all. The upstream
+  // is pinned and only the auth header is forwarded: an open proxy would relay anything the page
+  // can reach. dist/ stays static - this route exists only here.
+  if(req.method==='POST'&&new URL(req.url,'http://localhost').pathname==='/proxy/minimax'){
+   const chunks=[];let bytes=0;for await(const chunk of req){bytes+=chunk.length;if(bytes>1024*1024){res.writeHead(413);res.end();return;}chunks.push(chunk);}
+   const ctl=new AbortController();req.on('close',()=>ctl.abort());
+   try{
+    const up=await fetch('https://api.minimax.cn/anthropic/v1/messages',{method:'POST',signal:ctl.signal,body:Buffer.concat(chunks),
+     headers:{'content-type':'application/json','authorization':String(req.headers.authorization||''),
+      'anthropic-version':String(req.headers['anthropic-version']||'2023-06-01')}});
+    res.writeHead(up.status,{'Content-Type':up.headers.get('content-type')||'application/json'});
+    res.end(Buffer.from(await up.arrayBuffer()));
+   }catch(e){if(!res.headersSent){res.writeHead(502);res.end(String(e?.message||'upstream'));}}
+   return;
+  }
   if(!['GET','HEAD'].includes(req.method)){res.writeHead(405);res.end();return;}
   let name=decodeURIComponent(new URL(req.url,'http://localhost').pathname);
   if(name.endsWith('/'))name+='index.html';

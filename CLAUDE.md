@@ -101,7 +101,7 @@ The crowd (`CrowdSystem`) and the ecology (`CityEcology` + `LifeBinding`) both d
 
 ### server.mjs
 
-Static file server plus the capture sink. `POST /capture/...` only accepts a hard-coded filename allowlist, requires `Origin: http://127.0.0.1:<port>`, validates PNG/WebM magic bytes and JSON parseability, caps the body at 48 MiB, and writes to gitignored `evidence/`. Static responses carry a size+mtime ETag (304 on unchanged ~280 MB payloads) and stream `.json` gzipped.
+Static file server plus the capture sink, plus one dev-only egress: `POST /proxy/minimax` forwards to MiniMax's Anthropic-compatible endpoint (pinned upstream, only the auth header forwarded, 1 MiB body cap) so a browser:false provider is usable locally — same-origin, so no preflight exists. It does not ship to `dist/`. `POST /capture/...` only accepts a hard-coded filename allowlist, requires `Origin: http://127.0.0.1:<port>`, validates PNG/WebM magic bytes and JSON parseability, caps the body at 48 MiB, and writes to gitignored `evidence/`. Static responses carry a size+mtime ETag (304 on unchanged ~280 MB payloads) and stream `.json` gzipped.
 
 ## Conventions
 
@@ -120,7 +120,7 @@ Note that `applyLang()` fires every `onLang` hook **twice** — it calls `setLan
 
 ## Generated character portraits
 
-`src/ai-story.js` writes a short present-tense description plus one line of dialogue for the person you clicked. The visitor supplies their own key in the tools panel and picks a provider; the call goes browser → provider with `anthropic-dangerous-direct-browser-access: true`, so there is no server and `dist/` stays a pure static bundle. The SDK is not usable here — this repo has no bundler and serves `src/` raw, while the SDK pulls Node-only modules.
+`src/ai-story.js` writes a short present-tense description plus one line of dialogue for the person you clicked. The visitor supplies their own key in the tools panel, picks a provider, and may set a custom endpoint URL (`qm-url`) — a same-origin or local proxy. The call goes browser → endpoint with `anthropic-dangerous-direct-browser-access: true`, so there is no server and `dist/` stays a pure static bundle. The SDK is not usable here — this repo has no bundler and serves `src/` raw, while the SDK pulls Node-only modules.
 
 Two providers are configured, and they differ on exactly the two features this depends on. The capability flags come from each vendor's own compatibility table, not from what happens to work:
 
@@ -129,7 +129,7 @@ Two providers are configured, and they differ on exactly the two features this d
 | Anthropic (`claude-opus-5-5`) | supported | supported | `x-api-key` | **yes** |
 | MiniMax (`MiniMax-M3`) | not documented | not documented | `Authorization: Bearer` | **no** |
 
-**MiniMax cannot be called from the browser at all, and this is a server-side fact, not a code problem.** Probing its CORS preflight on 2026-10-04: `access-control-allow-headers` permits `Authorization` and `Content-Type` but refuses both `anthropic-version` and `anthropic-dangerous-direct-browser-access`. The preflight therefore fails and the browser never sends the request. There is no workaround — a request carrying a key as `application/json` is never a "simple request", so the preflight cannot be skipped. Anthropic's preflight returns `access-control-allow-headers: content-type,x-api-key,anthropic-version,anthropic-dangerous-direct-browser-access`, which is why the browser-direct design works there. MiniMax is kept in the table as `browser:false` and excluded from the picker and from `providerList()`; offering it produced a raw CORS message in the card with no way back short of clearing localStorage. Reaching it would need a same-origin proxy, which this static deploy does not have.
+**MiniMax cannot be called from the browser at its own endpoint, and this is a server-side fact, not a code problem.** Probing its CORS preflight on 2026-10-04: `access-control-allow-headers` permits `Authorization` and `Content-Type` but refuses both `anthropic-version` and `anthropic-dangerous-direct-browser-access`. The preflight therefore fails and the browser never sends the request. There is no direct workaround — a request carrying a key as `application/json` is never a "simple request", so the preflight cannot be skipped. Anthropic's preflight returns `access-control-allow-headers: content-type,x-api-key,anthropic-version,anthropic-dangerous-direct-browser-access`, which is why the browser-direct design works there. MiniMax is kept in the table as `browser:false`: excluded from the picker by default, but `providerList(url)` offers it once a custom endpoint URL is set, because that verdict was about the vendor's own CORS allowlist — a proxy answers its own preflight. For local runs `server.mjs` already provides one at `/proxy/minimax` — set 接口地址 to `http://127.0.0.1:4193/proxy/minimax` and MiniMax appears in the picker. Offering MiniMax without a URL produced a raw CORS message in the card with no way back short of clearing localStorage.
 
 Both vendors document `output_config.effort`, and both document `tools` / `tool_choice` as fully supported — so a provider that lacks `output_config.format` forces the shape through a **tool call** rather than a prompt instruction. That distinction is not theoretical: a live MiniMax call made from Node was answered with the json_schema silently dropped, producing 16 invented keys including a name and a twelve-year history for a porter who has neither in the data. A prompt instruction would not have saved it. Sending `output_config.format` to a provider that ignores it fails *quietly*, which is why `parseResponse` validates the shape locally and returns `null` rather than rendering whatever arrived. The `system` and `messages` bodies are byte-identical across providers, so only the envelope changes when you switch.
 
@@ -138,12 +138,54 @@ Four rules, each of which exists because the obvious alternative is wrong:
 - **Generated prose never goes through `t()`/`T()`/`E()`.** `english()` is an unanchored substring table with no word boundaries, so it turns 「八份货物」 into 「八units of cargo」 mid-sentence. `ai-story.js` may import only `t` (for its own chrome labels) and `getLang` from `i18n.js`; `tests/ai-story.mjs` enforces that over the source, not the exports.
 - **The prose node is a sibling of `#inspect-body`, never a child.** `show()` rebuilds that node wholesale every 350ms from `update()`, so anything nested inside it is destroyed three times a second. The test pins the *closing* tag, because an ordering check cannot tell a sibling from a child.
 - **The module never receives the engine.** It cannot reach `shadowDirty` or the render signature, so a stray refresh-on-arrival cannot turn `optimization-browser`'s `settingFrames===1` into 2 with no other symptom.
-- **Only a click spends money.** `show()` also runs from the language toggle and the 350ms tick, so `openAt()` sets a `fresh` flag that `show()` consumes; `offer()` is idempotent and returns early on a cache hit or an in-flight key.
+- **Spending is always an explicit click.** `offer()` runs on the 350ms tick and on every language toggle, so it only ever renders — the cache, or the 为其写照 prompt with its cost note. It never calls `generate()`; the only paths that fire a request are the 写照 button (`spend()`) and 换一句 (`again_()`). An earlier design auto-fired on the click that opened the card, which both spent money on readers who only wanted the facts and, on a failing call, re-spent every 350ms forever. While a request is in flight the card shows elapsed seconds (the only honest progress a non-streaming 20-60s call has) and a 取消 button that aborts; the 45s timeout aborts *with a reason* so it lands on the error path instead of the cancel fallback. On error the 换一句 button relabels itself 再试一次 (`aiRetry`), and a cache hit is bylined 早前写成 so a free re-render is never dressed as a fresh write.
 
-The cache key is `plan.name + lang + state + provider` — the provider is in it because two models write the same person differently, and serving one model's prose under the other's name misrepresents where the words came from.
+The cache key is `plan.name + lang + state + provider + url` — the provider is in it because two models write the same person differently, and the URL for the same reason: a custom endpoint can front a different model entirely, and serving one backend's prose under another's name misrepresents where the words came from.
 
 The prompt carries Chinese source values and instructs the output language, because translating facts client-side is lossy for the same reason `english()` is. The system prompt is a byte-stable constant because any interpolation — including a language toggle — silently kills the prompt cache. Cache on `plan.name + lang + state`: `actor.id` is a construction counter that an asset reorder would re-point, and a porter cycles through states, so a name-only key would serve a description of a moment that has passed.
 
+## `pick()` has no cheap version
+
+`pick()` is the depth-marched ray the inspect card and the cursor readout both use, and it is the most expensive thing in `src/`. Measured against the real `CollisionWorld` (475 rooms, 584 people, 12 boats) over 192 rays from a street-level eye:
+
+| | ms/call | agrees with a normal click |
+|---|---|---|
+| `max=170 step=.25` (default) | 3.56 | 100% |
+| `max=60 step=.25` | 1.72 | 74% |
+| `max=60 step=.5` | 0.98 | **21%** |
+
+**`step` is load-bearing and must stay at `.25`.** The march takes discrete volume samples along the ray, so halving the step steps straight over a figure; the OBB and floor tests never see it. Only `max` is a safe knob, and it trades range for time.
+
+98% of the cost is the march, not the setup: rebuilding the 475-entry `solids` array with its trig is 0.18ms (2.1%), while the march is 0.0124ms × up to 680 steps. The real fix is a spatial index over `rooms[]` — it has one, `boxGrid`, but `pick()` only uses the Z-band early-out — and that is a change to the shared collision path, so it has not been done.
+
+So anything that probes on a moving input is **rate-limited rather than optimised**. The cursor readout (`InspectUI.probe`) runs at 12Hz, only while the pointer or camera has actually moved, capped at `max=70`: median 2.1ms, p95 4–9ms, with a GC-driven tail from `pick()`'s per-call `solids` allocation. A still cursor costs nothing. There is a `pointermove` listener that only records coordinates, and `rayAt` cannot emit a degenerate direction (its length is always ≥ 1), so the probe is never worse than those numbers.
+
+## The ecology panel's numbers and its map key
+
+`ecology-ui.js` renders a key under the traffic map and a block of counters in the same panel. Both
+are pure functions of the ecology config (`legendRows(routes)`, `statRows(life)`) and exported so
+`tests/inspect-card.mjs` can assert them headlessly — a panel that can only be checked by opening a
+browser is a panel nobody opens. The key is rebuilt on a language toggle, not on the 350 ms tick,
+because the route config never changes while the page is open.
+
+**The map and the key must count the same thing.** 25 authored routes collapse onto **19 distinct
+paths** — 8 pedestrian, 4 porter, 1 convoy, and 6 river channels carrying all 12 vessels (five share
+one channel, three another). `chainsOf()` keys on x and y only, never z: the map is a plan projection,
+so two channels at different heights are one line to the reader. `renderMap()` draws one stroke per
+`chainsOf()` result and the key reports the same count, so they cannot drift. They used to: the map
+picked channels by a hard-coded `vessel-0`/`vessel-1` id and drew **2 of the river's 6**, so 10 of the
+12 vessels ran on lines that were not on screen. Boats are stroked at 0.9 px because all six channels
+lie in a 15 px band and the old 1.4 px merged them into one line.
+
+**Only counters observed to move are shown.** Run headlessly for 1200 simulated seconds: `berthVisits`
+5 (first at 80 s), `transferred` 40, `delivered` 76, `consumed` 76, `boatDistance` 10.1 km,
+`landDistance` 6.0 km. But `boatNearMisses`, `groundBlocks` and `personReplans` **never fired once in
+20 minutes of simulated city time**, and `boatOverlaps` has no increment site at all — it is
+initialised and never written. A row reading 0 for those would read as "no collisions ever happened"
+when it means "that branch is unreachable", which is a safety claim the code cannot support. `steps`
+is excluded for the opposite reason: it is seconds × 30. The three dead ones are named in the comment
+on `statRows()` so nobody reinstates them as if they were a scoreboard.
+
 ## Working tree note
 
-The repo was last committed with a Cloudflare Pages deploy while `DEVELOPMENT.md` and `vercel.json` still describe Vercel. The working tree also currently has several LFS files deleted (`assets/Qingming_Current_City.glb`, `production/*.blend`, `public/runtime/city.bin.gz`) — restore them (`git lfs pull` / `git restore`) before running the app or the build, since `tools/build-web.mjs` and `tests/package.mjs` hash-verify those bytes.
+The repo was last committed with a Cloudflare Pages deploy while `DEVELOPMENT.md` and `vercel.json` still describe Vercel. The LFS payloads are all fetched (`assets/Qingming_Current_City.glb` 188M, `public/runtime/city.bin.gz` 136M), so `tools/build-web.mjs` and `tests/package.mjs` can hash-verify them; if a checkout ever shows them as deleted, restore with `git lfs pull` / `git restore` rather than assuming a missing file is a real one — a pointer stub is ~130 bytes and still reads as "present".

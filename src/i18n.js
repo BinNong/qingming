@@ -72,7 +72,17 @@ ecoTitle:['满城皆动','A city in motion.'],
 ecoTime:['推演时刻','Simulation time'],
 ecoPreparing:['正在备算江河与市衢','Preparing river and road traffic'],
 mapLabel:['行人、舟船与车队的实时路径','Live routes for people, boats and carts'],
-ecoLegend:['青：舟船 · 棕：车队 · 绿：行人','Teal: boats · Brown: carts · Green: people'],
+// The map key and the ledger. The map draws 15 of the 19 distinct route paths and the key now says
+// which, so the counts are the ones the key actually reports rather than the number of records in
+// ecology.json - 25 routes collapse onto 19 paths because five vessels share a channel and three
+// share another. A key that quoted 25 against a map showing 15 would be the kind of small lie this
+// panel has never told.
+legendTitle:['图例','Key'],
+legendPeople:['行人','Pedestrians'],legendPorters:['挑夫','Porters'],legendConvoy:['车队','Convoy'],legendBoats:['舟船','Vessels'],
+legendChains:['段','chains'],legendCount:['× {0}','× {0}'],
+stFreight:['货运','Freight'],stBerths:['泊次','Berths'],stConsumed:['消耗','Consumed'],
+stJourney:['行程','Distance'],stRiver:['水路','River'],stLand:['陆路','Road'],
+stPeople:['人群','People'],stMoving:['在行','Moving'],stStanding:['常驻','Standing'],
 lblFollow:['跟随舟船','Follow a boat'],
 btnFollowBoat:['跟随此船','Follow boat'],
 btnFollowCart:['跟随车队','Follow carts'],
@@ -155,6 +165,11 @@ olRiver:['江 河 之 水','THE RIVER'],olTraffic:['舟 船 往 来','RIVER TRAF
 waterTitle:['汴河之水','Bianjing Water'],
 convoyTitle:['第 {0} 队','Convoy {0}'],
 inspectMiss:['此处空无所有——请点街道、水面、舟船或生人。','Nothing there — click the street, the water, a boat or a person.'],
+// Following one figure. Only offered for the 219 citizens CityEcology actually moves; the other 365
+// are residents, shopkeepers, seated figures and boat crew, and a follow button on a figure that
+// never moves reads as a broken button rather than as an absent one.
+btnFollowPerson:['跟随此人','Follow'],btnUnfollow:['停止跟随','Stop following'],
+followPerson:['跟着{0}走','Following {0}'],
 // —— 检视卡 · 行标签 ——
 rSurface:['水面','Surface level'],rCurrent:['流速','Current'],rSwell:['浪势','Swell'],rWake:['余波存留','Wake memory'],rUnderway:['在行舟船','Vessels under way'],
 rSurfaceKind:['地表','Surface'],
@@ -164,6 +179,11 @@ warehouse:['{0} 号仓棚','Warehouse {0}'],
 rOccupation:['行业','Occupation'],rPosition:['身份','Role'],rActivity:['正在','Activity'],rGesture:['身段','Gesture'],rNameField:['名字','Name'],
 rBuilding:['建筑','Building'],rPrecinct:['片区','Precinct'],rStoreys:['层数','Storeys'],rFloor:['楼层','Floor'],rDistrict:['地段','District'],
 rGround:['地坪','Ground level'],rHandle:['启闭','Handle'],rEnterable:['可否入内','Enterable'],pressKey:['按键','Key'],
+// The cursor readout's three segments. Distinct from rBuilding/rGesture because those are
+// left-hand ROW labels in the card, and this is an inline run of text that follows the cursor -
+// 近旁 rather than 建筑 because a cloth shop 9m off is a neighbour, not the building you are in,
+// and the trailing colon is here rather than in the caller's separator.
+hNear:['近旁：','Nearby: '],hPlace:['近处：','Near: '],hPose:['身段：','Posture: '],
 // —— 检视卡 · 取值 ——
 suffixM:[' 米',' m'],suffixMS:[' 米/秒',' m/s'],suffixUnit:[' 份',' units'],suffixFrames:[' 帧',' frames'],suffixKm:[' 公里',' km'],
 suffixOf:[' / ',' of '],suffixPct:['满浪 {0}%','{0}% of full'],
@@ -181,10 +201,15 @@ doorOpen:['开','Open'],doorClosed:['合','Closed'],
 aiOverline:['其 人','THE PERSON'],aiThinking:['正在看他……','Watching him……'],
 aiAgain:['换一句','Another line'],aiNoKey:['尚未设置 API 密钥','No API key yet'],
 aiFailed:['写不出来','Could not write'],aiRetry:['再试一次','Try again'],
+aiMake:['为其写照','Write their portrait'],aiCancel:['取消','Cancel'],
+aiWait:['还在看…… {0} 秒','Still watching… {0}s'],
+aiCached:['早前写成，本次未再花费','Written earlier — no new charge'],
 aiKeyBad:['密钥被拒，请检查。','Key rejected — check it.'],
 aiNoReach:['连不上服务商，可能是网络或跨域限制。','Could not reach the service — network, or a cross-origin limit.'],
 aiByline:['由模型依数据写成','Written from the scene data'],
 lblApiKey:['API 密钥','API key'],
+lblApiUrl:['接口地址','Endpoint URL'],
+aiUrlNote:['地址留空用官方接口；填自建代理地址即可选用 MiniMax。','Leave empty for the official endpoint; set your own proxy to enable MiniMax.'],
 lblProvider:['模型服务','Model service'],
 aiKeyNote:['密钥只存在本机浏览器，直连所选服务商，不经任何服务器。','The key stays in this browser and goes straight to the service you pick. No server of ours sees it.'],
 aiCost:['每次约 ¥0.02','About ¥0.02 each'],
