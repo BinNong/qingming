@@ -7,6 +7,13 @@
 *.pem
 *.key
 
+# A local helper that waits for the LFS payloads and then starts the server. Anchored, because it
+# lives at the repo root and a bare name would also swallow a same-named file in a subdirectory. It
+# is not portable rather than merely personal: it hardcodes an absolute home path and checks for
+# pointer stubs with `stat -f%z`, which is BSD-only and prints the filesystem type on Linux, so
+# every good file would report as a stub there.
+/run_when_ready.sh
+
 # Harness settings hold a live ANTHROPIC_AUTH_TOKEN in plaintext. The whole directory is ignored
 # rather than just that file, so a settings.local.json or a new credential file cannot slip in
 # through `git add -A`.
