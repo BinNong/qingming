@@ -172,9 +172,13 @@ export class InspectUI {
   // readout dead in the default view: the overview camera sits 116-152m from the whole cast, so
   // every figure was past the cap and nothing ever appeared. A ray that finds something stops at
   // the hit, so range only costs on a MISS - 3.5ms against 1.7ms - and 12Hz of that is ~4% of a
-  // frame, which is the honest number. Passing this.ctx itself also drops a per-probe object
-  // allocation, which was feeding the GC tail pick()'s solids rebuild already produces.
-  const hit=pick(this.engine.navigation,ray.origin,ray.dir,this.ctx);
+  // frame, which is the honest number.
+  // The copy carries fresh convoy boxes. ctx.boxes is stamped in openAt() and deliberately frozen
+  // there, so the portrait describes the moment of the click; the carts themselves keep moving every
+  // 1/30s, so probing against that stamp reports where a cart was when you last clicked. Nine
+  // convoys at 12Hz is not a cost worth trading a correct answer for.
+  const live={...this.ctx,boxes:this.engine.life.convoys.flatMap(v=>this.engine.life.convoyBoxes(v))};
+  const hit=pick(this.engine.navigation,ray.origin,ray.dir,live);
   const seg=hoverLine(hit,this.ctx);
   if(!seg||!seg.length){this.hideHover();return;}
   const text=seg.join(' · ');
@@ -204,13 +208,12 @@ export class InspectUI {
  *  of one call. The English-only sentence-case helper is gone: it had nothing to do in Chinese. */
 const unit=(key,v,d=2)=>Number(v).toFixed(d)+t(key);
 
-/** The trade of the building a ground point sits by. rooms[] already carries name = the authored
- *  kind, so this is the same lookup the portrait's facts use, and it never returns an asset id. */
-function tradeNear(ctx,p){
- if(!p)return '';
- let best='',bd=Infinity;
- for(const r of ctx?.rooms||[]){const d=(r.x-p[0])*(r.x-p[0])+(r.y-p[1])*(r.y-p[1]);if(d<bd){bd=d;best=r.name;}}
- return best||'';}
+/** The trade of the building a point stands in. This is placeFacts(), not a nearest-room search:
+ *  rooms[] carries name = the authored kind, and standing inside one is a test (standsAt), not a
+ *  distance. A centre-distance search puts the nearest shop's trade under 建筑 for a door thirty
+ *  metres from anything, and the room it names may be on another storey entirely. Returns '' when
+ *  the point is in the open, which drops the row rather than inventing one. */
+const tradeNear=(ctx,p)=>p?placeFacts(p,ctx).building||'':'';
 
 /** Whether the follow button is offered for this hit. `actor.life` and not `actor.walk`: the 25
  *  instances authored with motion.kind==='walk' are all travellers or porters, and attachPeople
@@ -295,8 +298,11 @@ export function describe(hit,ctx){
   case 'door':{const d=hit.door;
    // The building row used to print d.a.name, which is the door's own asset id - `Door_Shop_00_1`
    // under a 建筑 heading, in both languages, because english() has no row for it. That is the same
-   // defect class as the Handcart__0912 leak, so the trade comes from the building it stands in.
-   const near=tradeNear(ctx,d.box?[d.box.x,d.box.y]:hit.point);
+   // defect class as the Handcart__0912 leak, so the trade comes from the building the door stands
+   // in - tested by standsAt, so a door out on the street reports nothing instead of a neighbour.
+   // hit.point, not d.box: the march's z is the height the reader actually hit the door at, which
+   // is what the storey test needs, and a box with no `lo` in it makes that test pass on NaN.
+   const near=tradeNear(ctx,hit.point??(d.box?[d.box.x,d.box.y,d.box.lo]:null));
    return{overline:t('olDoor'),title:T(d.mo.label),rows:[
     [t('rState'),t(hit.open?'doorOpen':'doorClosed')],...(near?[[t('rBuilding'),T(near)]]:[]),
     [t('pressKey'),'E']]};}

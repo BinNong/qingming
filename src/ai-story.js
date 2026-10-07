@@ -1,4 +1,5 @@
 import {getLang,t} from './i18n.js';
+import {sayLine} from './voice.js';
 
 /** A person you can point at, described in the language the reader is already reading in.
  *
@@ -107,10 +108,15 @@ const HOUR=[[11,'上午'],[13,'正午'],[15.5,'午后'],[17,'向晚'],[Infinity,
 export const hourBucket=h=>{for(const[at,name]of HOUR)if(h<at)return name;return HOUR[HOUR.length-1][1];};
 
 /** Whether a figure can honestly be said to be standing at this building: outside its footprint by
- *  no more than BUILD_R, and at its ground floor rather than in the air above it. rooms[] carries
- *  the OBB (hx/hy/angle) and the storey band (lo) for exactly this. */
+ *  no more than BUILD_R, and at its own storey rather than above it or a storey below it. rooms[]
+ *  carries the OBB (hx/hy/angle) and the storey band (lo) for exactly this. The height test is
+ *  symmetric because one-sided it is not a storey test: everything on the ground floor sits inside
+ *  the first-floor room in plan, and a door in the street under a balcony is credited to the balcony.
+ *  It changes nothing today - all 475 runtime rooms have lo between 2.43 and 2.58, so there is no
+ *  second storey to confuse - and it is here because a synthetic room in tests/inspect-card.mjs
+ *  does have one, and the rule should not depend on the data happening to be flat. */
 function standsAt(r,p){
- if(p[2]-r.lo>BUILD_Z)return false;
+ if(Math.abs(p[2]-r.lo)>BUILD_Z)return false;
  const cs=Math.cos(r.angle||0),sn=Math.sin(r.angle||0),dx=p[0]-r.x,dy=p[1]-r.y;
  const lx=Math.abs(dx*cs+dy*sn)-(r.hx||0),ly=Math.abs(-dx*sn+dy*cs)-(r.hy||0);
  return Math.hypot(Math.max(0,lx),Math.max(0,ly))<=BUILD_R;}
@@ -391,7 +397,7 @@ export class AIStoryUI{
   this.again=document.querySelector('#ai-again');
   this.make=document.querySelector('#ai-make');
   this.cancel=document.querySelector('#ai-cancel');
-  this.current=null;this.busy=null;this.variant=0;this.abort=null;this.tick=null;
+  this.current=null;this.busy=null;this.variant=0;this.abort=null;this.tick=null;this.spoken=new Set();this.reading=null;
   // "Another line" has to be a *different* request, not the same one again: the prompt is byte-stable
   // for cache reasons, so a repeat would return the identical prose. The variant rides along as a
   // user turn rather than in the system prompt, which keeps the cached prefix intact.
@@ -506,10 +512,35 @@ export class AIStoryUI{
   // textContent throughout: the card body is built by innerHTML interpolation, and model output
   // must never share that path.
   say(this.desc,state.description);say(this.line,state.line);vis(this.line,true);
+  // Read it once, and only once. This line is reached roughly three times a second, because
+  // offer() repaints from cache on every 350ms tick, so a plain speak() here talks over itself.
+  // The guard keys on the text rather than the cache key: again_() reuses one key for a different
+  // line - that is the whole point of the button - so a key-based guard would swallow 换一句 too.
+  // A set rather than the last line, so that returning to a portrait after hearing someone else
+  // is still silent, which is what "once" is supposed to mean. It is not cleared in clear(), so a
+  // close and a cache hit stay silent. A language switch does NOT: the cache key is language-scoped,
+  // so the same person arrives with a different sentence in the other tongue and that one is read.
+  //
+  // The mark is committed on completion, not on starting: a line takes 6.4s, and a 试听 click or the
+  // mute switch cuts it off mid-sentence. Committing at the start loses that tail for the session,
+  // because nothing would ever ask for the line again. `reading` is what stops the 350ms repaint
+  // from restarting it in the meantime - and it is set whether or not the mark eventually lands,
+  // so a muted or not-yet-loaded card is simply retried rather than retired.
+  if(!this.spoken.has(state.line)&&this.reading!==state.line){
+   this.reading=state.line;
+   // sayLine reports whether it started. It does not, the sound is off or the OS has not
+   // delivered its voices, and it will not call done - so the marker has to come back off here or
+   // the line is "reading" for the rest of the session and can never be offered again.
+   const started=sayLine(state.line,finished=>{this.reading=null;if(finished)this.spoken.add(state.line);});
+   if(!started)this.reading=null;}
   // A cache hit cost nothing this time - the byline says so, rather than implying a fresh write.
   say(this.note,state.cached?t('aiCached'):t('aiByline'));
   say(this.again,t('aiAgain'));vis(this.again,true);
  }
+ /** Drops the "already read" mark so the next line is spoken even if the reader has met it before.
+  *  The voice switch calls this on the way back up, which is the only way to hear a line twice
+  *  without spending another request. */
+ forget(){this.spoken.clear();}
  /** Bumps the identity so a late reply for a previous person cannot repaint the new card. `busy` is
   *  deliberately left alone: it guards the network, not the display, and dropping it mid-request
   *  would let the next 350ms tick start a second call for a request already in flight. */

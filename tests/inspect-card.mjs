@@ -79,6 +79,22 @@ for(const lang of ['zh','en']){
  const row=rowOf(describe(surfaces[5],ctx),t('rBuilding'));
  assert.notEqual(row,'Door_Shop_00_1','the door card must not print the door asset id as the building');
  assert(!/^Door_/.test(row??''),`the door card leaked an asset id: ${row}`);
+ // The row used to be satisfied by any non-id string, including none at all - both assertions
+ // above pass on undefined, so deleting the row entirely read as a fix. It has to name the
+ // building when the door stands in one, and be absent when it does not.
+ // This door sits at the world origin, which is in the street and inside no room, so there is
+ // nothing true to print. The old nearest-by-centre search named a shop 30m away, which read as
+ // fact. A row may only appear when a room actually contains the point.
+ const {placeFacts}=await import('../src/ai-story.js');
+ const containing=ctx.rooms.find(r=>placeFacts([0,0,0],{rooms:[r]}).building);
+ if(row!==undefined)assert.equal(row,containing?.name??null,
+  `the 建筑 row names a room the door does not stand in: ${row}`);
+ else assert.equal(containing,undefined,'and no room at all contains this door, so printing nothing is right');
+ const inShop=describe(surfaces[5],{...ctx,rooms:[{x:0,y:0,hx:5,hy:5,lo:0,hi:6,angle:0,name:'香铺营业厅'}]});
+ assert.equal(rowOf(inShop,t('rBuilding')),T('香铺营业厅'),'a door standing inside a room does name it');
+ const upstairs=describe(surfaces[5],{...ctx,rooms:[{x:0,y:0,hx:5,hy:5,lo:6,hi:9,angle:0,name:'香铺楼阁'}]});
+ assert.equal(rowOf(upstairs,t('rBuilding')),undefined,
+  'and a room on another storey is not the building the door stands in');
 }
 // A language switch must change the chrome, or the toggle silently leaves the old language up.
 setLang('en');
@@ -161,34 +177,41 @@ assert(css.includes('#hover-readout[hidden]{display:none}'),
 assert(/#hover-readout\{[^}]*z-index:26/.test(css),'the readout is repositioned under the cursor and must sit above #tools (z-index 25)');
 assert(/#hover-readout\{[^}]*pointer-events:none/.test(css),'a readout that swallowed clicks would break the card it sits next to');
 
-// --- Following one figure. Three subject kinds, three different heading conventions, and person
-// and convoy differ by a quarter turn - copy the wrong one and the camera lands 90 degrees off,
-// which still produces a plausible-looking shot and is invisible until someone rides it.
-const rot=([x,y],a)=>[x*Math.cos(a)-y*Math.sin(a),x*Math.sin(a)+y*Math.cos(a)];
-for(const h of [0,0.7,-0.7,Math.PI/2,-Math.PI/2,2.4]){
- const f={boat:followForward('boat',h),person:followForward('person',h),cart:followForward('cart',h)};
- for(const k of ['boat','person','cart'])assert(Math.abs(Math.hypot(...f[k])-1)<1e-9,`the ${k} forward vector must be a unit vector, got ${f[k]}`);
- // A boat heading is atan2(dir[1],dir[0]), so its forward IS that direction. An actor's heading is
- // atan2(dx,-dy) of its own movement, so its forward is the mirror of the boat's across x - which
- // is why person and cart are not a fixed rotation apart and meet again at h=0 and h=PI.
- const mirrored=rot(f.boat,-2*h);
- assert(Math.hypot(f.person[0]-mirrored[0],f.person[1]-mirrored[1])<1e-9,
-  `a person forward must be the boat direction reflected across x, got ${f.person} not ${mirrored}`);
- // The convoy convention is the boat one turned a fixed quarter, and that is the one place where a
- // copy-paste produces a plausible shot rotated 90 degrees.
- const turned=rot(f.boat,-Math.PI/2);
- assert(Math.hypot(f.cart[0]-turned[0],f.cart[1]-turned[1])<1e-9,
-  `a convoy forward must be the boat direction turned -90 degrees, got ${f.cart} not ${turned}`);
+// --- Following one figure. Two heading conventions, not three, and getting one wrong rotates the
+// camera while leaving its distance correct - the browser check that shipped this measured 3.56m
+// against a designed 3.45m and passed, because a rotation is invisible to a distance.
+//
+// Everything below derives a heading the way the simulation does and then requires the forward
+// vector to point along the movement it came from. The previous version related the three kinds to
+// each other instead: person was asserted equal to rot(boat,-2h), which expands to exactly the
+// person branch - algebraically identical to its own definition, so it certified whatever the code
+// said, including the wrong answer. Relations between the branches cannot fail; ground truth can.
+const MOVES=[[1,0],[0,-1],[-2,5],[0.6,-0.8],[3,4],[0,1],[-1,-1]];
+for(const [dx,dy] of MOVES){
+ const L=Math.hypot(dx,dy);
+ // simulation.js:193 stamps a person and simulation.js:267 stamps a convoy from atan2(dx,-dy).
+ const h=Math.atan2(dx,-dy),truth=[dx/L,dy/L];
+ for(const k of ['person','cart']){
+  const f=followForward(k,h);
+  assert(Math.hypot(f[0]-truth[0],f[1]-truth[1])<1e-9,
+   `${k} moving (${dx},${dy}) takes heading atan2(dx,-dy)=${h.toFixed(4)}, whose forward is `+
+   `(${truth.map(v=>v.toFixed(4))}), but followForward returned (${f.map(v=>v.toFixed(4))})`);
+ }
+ // simulation.js:231 stamps a boat from atan2(dir[1],dir[0]) instead - a genuinely other convention.
+ const bh=Math.atan2(dy,dx),bf=followForward('boat',bh);
+ assert(Math.hypot(bf[0]-truth[0],bf[1]-truth[1])<1e-9,
+  `a boat moving (${dx},${dy}) takes heading atan2(dy,dx), whose forward is (${truth}), but followForward returned (${bf})`);
 }
-// The two that get confused are person and cart, and at a realistic street heading they land in
-// genuinely different places.
-assert.notDeepEqual(followForward('person',0.7),followForward('cart',0.7),'person and convoy must not resolve to the same vector');
-// Reconstructing the movement from the heading is the invariant that actually matters: for a boat
-// and an actor alike, the forward vector must be the direction it is travelling.
-for(const h of [0.3,1.1,-2.2]){
- assert(Math.abs(followForward('person',h)[0]-Math.cos(h))<1e-12,'cos component');
- assert(Math.abs(followForward('person',h)[1]+Math.sin(h))<1e-12,'an actor heading is atan2(dx,-dy), so -sin recovers dy');
-}
+// Person and convoy are stamped by the same expression, so the two branches must be one function.
+// They were written as two different ones, which is the whole defect.
+for(const h of [0,0.7,-0.7,Math.PI/2,-Math.PI/2,2.4])
+ assert.deepEqual(followForward('person',h),followForward('cart',h),
+  `person and convoy share the atan2(dx,-dy) convention, so they must resolve identically at h=${h}`);
+// ...and the boat is not that convention, so a copy between the two must still be caught.
+assert.notDeepEqual(followForward('boat',0.7),followForward('cart',0.7),'boat and convoy use different conventions');
+for(const h of [0,0.7,-0.7,Math.PI/2,-Math.PI/2,2.4])
+ for(const k of ['boat','person','cart'])
+  assert(Math.abs(Math.hypot(...followForward(k,h))-1)<1e-9,`the ${k} forward vector must be a unit vector`);
 
 // --- Who is followable. actor.life, NOT actor.walk: attachPeople clears walk on every planned
 // actor, so all 584 figures have walk=false and testing on it would hide the button for everyone.
@@ -256,6 +279,16 @@ for(const lang of ['zh','en']){
   assert(g.head&&!/legend|Chains/.test(g.head),`${lang}: a group header fell through to a key: ${g.head}`);}}
 setLang('en');
 assert(byKind.boat.names[0].includes('×')||byKind.boat.names[0].includes('Vessel'),'the vessel breakdown must be present');
+// The chain count is glued straight onto the number. Chinese reads `12 / 6段` and hides the problem;
+// English renders `12 / 6chains`. The sibling legendCount is .trim()ed for exactly this reason, so
+// the separator has to be asserted rather than assumed.
+for(const lang of ['zh','en']){
+ setLang(lang);
+ const g=legendRows(eco.routes).find(x=>x.kind==='boat'&&x.chains!==x.records);
+ assert(g,'the vessel group is the one whose records and chains differ');
+ const em=`${g.records} / ${g.chains} ${t('legendChains')}`;
+ assert.equal(/\d\s\S/.test(em),true,`${lang}: the chain count needs a separator before its unit: ${em}`);
+}
 // The swatch colours are the map's own stroke colours; a key whose square is a different colour
 // from its line is worse than no key.
 for(const [k,v] of Object.entries(TINT))assert(/^#[0-9a-f]{6}$/i.test(v),`TINT.${k} is not a colour: ${v}`);

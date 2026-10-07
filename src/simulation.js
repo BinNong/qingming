@@ -458,11 +458,13 @@ function roomIn(spec,building,point){
 
 export { V,multiply,identity,invert,transform,Z_TO_Y,world,mix,CollisionWorld,Walker,CrowdSystem,CityEcology,LifeBinding,ArcPath,lifeOBBOverlap,lifeBoatHull,pick,lifeRiver,personHit };
 
-/** The forward vector for a followed subject, in navigation space. Each kind stores its heading
- *  differently and none of the three agree: a boat takes atan2(dir[1],dir[0]), a convoy takes the
- *  nav heading where x runs across the street, and an actor takes atan2(dx,-dy) from its own
- *  movement (simulation.js:193). Person and convoy differ by a quarter turn, so copying the wrong
- *  one puts the camera 90 degrees off and still produces a plausible-looking shot. Exported so
- *  tests/inspect-card.mjs can pin all three against each other. */
+/** The forward vector for a followed subject, in navigation space. Two conventions, not three: a
+ *  boat takes atan2(dir[1],dir[0]) so its forward IS that direction, and BOTH a convoy and an actor
+ *  take atan2(dx,-dy) - of the path direction and of their own movement respectively - which solves
+ *  to [sin,-cos]. So person and cart are the same branch, and writing them as two different ones is
+ *  how the camera ended up rotated: at h=0 the wrong form gives (1,0) where the subject walks (0,-1),
+ *  so the camera sat ahead of them, not behind, while its distance measured a correct 3.56m. A
+ *  distance check cannot see a rotation. Exported so tests/inspect-card.mjs can pin both conventions
+ *  against ground truth rather than against each other, which is what let the error through. */
 export const followForward=(kind,heading)=>kind==='boat'?[Math.cos(heading),Math.sin(heading)]
- :kind==='person'?[Math.cos(heading),-Math.sin(heading)]:[Math.sin(heading),-Math.cos(heading)];
+ :[Math.sin(heading),-Math.cos(heading)];

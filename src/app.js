@@ -5,6 +5,7 @@ import {loadCity} from './loader.js';
 import {EcologyUI} from './ecology-ui.js';
 import {InspectUI} from './inspect.js';
 import {AIStoryUI,readKey,writeKey,readProvider,writeProvider,providerList,readUrl,writeUrl} from './ai-story.js';
+import {voiceFor,voiceList,voiceLabel,voiceListNow,voiceOn,setVoiceOn,readVoice,writeVoice,speak,hush,onVoices} from './voice.js';
 import {ThreeCityEngine} from './three-engine.js';
 
 
@@ -46,6 +47,32 @@ function relabelChrome(){
 $('#lang-btn').textContent=getLang()==='zh'?'EN':'中';
 $('#lang-btn').onclick=()=>{applyLang(getLang()==='zh'?'en':'zh');$('#lang-btn').textContent=getLang()==='zh'?'EN':'中';};
 $('#tools-btn').onclick=()=>$('#tools').classList.toggle('open');
+// The voice switch stays hidden until the OS hands over its voice list. A list that has not
+// arrived and a list with nothing for the current language are different facts: the first lasts
+// about three seconds on every page load, the second is the only one that makes the button useless.
+let voiceBuilt='';
+const fillVoices=()=>{const sel=$('#voice-pick'),list=voiceList(voiceListNow(),getLang()),pick=voiceFor(getLang(),voiceListNow(),readVoice());
+ const hide=!pick;for(const el of ['#voice-btn','#voice-audition','#voice-row'])$(el).hidden=hide;
+ if(!pick){sel.textContent='';voiceBuilt='';return;}
+ // Keyed on the names as well as the length: a list delivered in batches can change without
+ // changing size, and a stale picker would offer a voice the browser no longer enumerates.
+ const key=getLang()+list.map(v=>v.name).join();
+ if(voiceBuilt!==key){voiceBuilt=key;sel.textContent='';
+  for(const v of list){const o=document.createElement('option');o.value=v.name;o.textContent=voiceLabel(v)+' · '+v.lang;sel.appendChild(o);}}
+ sel.value=pick.name;};
+const markVoice=on=>{$('#voice-btn').classList.toggle('active',on);$('#voice-btn').setAttribute('aria-pressed',on?'true':'false');};
+markVoice(voiceOn());
+// Off stops the line already playing, not the next one: it runs 6.4s, and a switch that silences the
+// future while the present keeps talking is not a switch. On drops the "already read" mark, so it
+// is also the way to hear a line twice without spending another request on it.
+$('#voice-btn').onclick=()=>{const on=!voiceOn();setVoiceOn(on);markVoice(on);
+ if(on)inspectUI?.story?.forget();else hush();};
+$('#voice-pick').onchange=e=>writeVoice(e.target.value);
+// The audition is a deliberate request to hear this voice, so it plays whatever ♪ says - that
+// switch is labelled for the portrait's line, not for a master mute, and a picker you cannot
+// preview is not a picker.
+$('#voice-audition').onclick=()=>speak(t('voiceAudition'),voiceFor(getLang(),voiceListNow(),$('#voice-pick').value));
+onVoices(fillVoices);onLang(fillVoices);
 // The visitor's own key, kept in localStorage like the language choice. It is sent straight to
 // the selected provider from the browser and never touches this repository or any server of ours.
 $('#qm-key').value=readKey();$('#qm-key').onchange=e=>{writeKey(e.target.value);toast(t('aiKeyNote'));};

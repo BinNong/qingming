@@ -35,6 +35,7 @@ node tests/render-quality.mjs   # water readback, quality tiers, resize/MSAA
 node tests/english.mjs          # no Han characters leak into the English UI
 node tests/i18n.mjs             # bilingual chrome, data values and mesh-id leaks
 node tests/ai-story.mjs         # generated-portrait facts, guards, cache key and DOM contract
+node tests/voice.mjs            # voice ranking against a captured real list, once-per-line guard
 node tests/auto-batches.mjs     # native Auto batching / LOD / culling
 node tests/capture.mjs          # server.mjs capture endpoint
 node tests/web-loader.mjs       # split-SoA loading path
@@ -185,6 +186,38 @@ initialised and never written. A row reading 0 for those would read as "no colli
 when it means "that branch is unreachable", which is a safety claim the code cannot support. `steps`
 is excluded for the opposite reason: it is seconds × 30. The three dead ones are named in the comment
 on `statRows()` so nobody reinstates them as if they were a scoreboard.
+
+## Speaking the generated line
+
+`src/voice.js` reads the one line of dialogue the model already writes (`STORY_SCHEMA.line`, rendered at `#ai-line`) aloud, using voices the **operating system** provides. That is the whole reason it is cheap: no audio asset ships, nothing is fetched, and the prose the model wrote never leaves the machine on this path — the same line the visitor's API key sits on.
+
+Four facts about the Web Speech API, all measured in Chromium on macOS on 2026-10-06 and all of them things a plausible implementation gets wrong. `tests/fixtures/voices-macos.json` is the raw 180-voice list they came from, captured rather than written by hand — a hand-written list of pleasant voices would have passed every test while sharing nothing with the machine the code runs on.
+
+| | measured | so |
+|---|---|---|
+| the voice list | `getVoices()` returns `[]` for the first **2.8s** (10.3s on a cold load of this app — the event queues behind 117 MB of unpacking), then one `voiceschanged` carries all 180 | an empty list means "not yet" as often as "nothing for this language", and only the second retires the control. `voicesReady()` tells them apart; treating the first as the second hides the button on every load |
+| the `default` flag | exactly **1 of 180** voices is flagged default, and it is `婷婷`/zh-CN | "the default" is not an answer in English at all |
+| the list order | en-US arrives with **Albert** — a novelty voice — first and `Samantha` twenty-first | "the first match" reads the prose in a joke. `voiceFor()` ranks an explicit choice, then a short list of voices known to read prose, then the flag, then anything local |
+| queueing | consecutive `speak()` calls queue, and a `cancel()` then discards everything still queued **without firing an event on it** | a second portrait would vanish undetectably. `speak()` cancels before every utterance |
+
+A 29-character line takes **6.4 seconds** in 婷婷, which is the reason the prompt's "under twenty words" is also what keeps this out of Chrome's ~15s utterance cutoff. `say -v` and `speechSynthesis.getVoices()` do **not** agree — the CLI lists `Sinji`, no browser here reports it — so the fixture has to come from the browser.
+
+**The guard is the feature.** `paint()` reaches the prose branch about three times a second, because `offer()` repaints from cache on every 350 ms tick, so a plain `speak()` there talks over itself. It keys on the line's *text* against a `Set`, not on `cacheKey` — `again_()` reuses one key for a different line, so a key-based guard would swallow 换一句 — and it is not cleared in `clear()`, so a close and a cache hit stay silent. **A language switch does not stay silent**: the cache key is language-scoped, so the same person arrives with a different sentence in the other tongue and that one is read. Marking is also conditional on `sayLine()` having actually spoken — a card that rendered while the sound was off, or before the OS delivered its voices, must not be retired for the session. Turning the sound off and on again (`forget()`) is the only way to hear a line twice, and turning it *off* cancels the line already playing, which at 6.4 s is the difference between a switch and a lie.
+
+Two more things the real list settles. macOS localises the language inside a voice's name — 16 of the 41 English ones are `Eddy (英语（美国）)` — so `voiceLabel()` drops the parenthetical; the English picker is otherwise the exact Han leak `tests/english.mjs` exists to prevent, arriving from the OS instead of the JSON. And the list is **not** latched: `collect()` adopts a changed list and re-fires, `onVoices` keeps a late subscriber subscribed, and a bounded retry runs in case the single event is missed, because each of those is a way the control would otherwise be retired for the life of the page. `tests/voice.mjs` pins the ranking, the labels and the say/don't-say contract against the captured list; the once-per-line rule and the repaint rate are only verifiable in a browser, which is where they were checked.
+
+## A followed subject's forward vector
+
+`followForward(kind, heading)` reduces to **two** conventions, not three. A boat stores `atan2(dir[1],dir[0])`, so its forward is that direction directly. A convoy (`simulation.js:267`) and an actor (`simulation.js:193`) both store `atan2(dx,-dy)` — of the path direction and of their own movement — which solves to `[sin h, -cos h]`. Person and convoy are therefore **the same branch**; they were once written as two different expressions, which put the follow camera beside the figure instead of behind it:
+
+| six real walkers | `along` (m, + is in front) | `side` (m) |
+|---|---|---|
+| written as two branches | +0.96 … −1.58 | ~2.9 |
+| correct | −2.9 every frame | 0.95 |
+
+**The bug survived a browser check because that check measured the wrong quantity.** Camera-to-subject distance reads 3.56 m against a designed 3.45 m either way — a rotation is invisible to a distance. The quantity that shows it is the component of (camera − subject) along the subject's travel direction, and the two offsets were swapped: `along` should be the −2.9 m standoff and `side` the 0.95 m offset, and they arrive exchanged. Assert on `along` and `side`, never on the distance.
+
+The test pins this against **ground truth** — a movement `(dx,dy)`, the heading the simulation derives from it, and the requirement that the forward vector equal the unit movement. The previous version related the three kinds to each other (`person == rot(boat, −2h)`), which expands to exactly the person branch: algebraically identical to its own definition, so it certified whatever the code said. Relations between branches cannot fail. Ground truth can, and did.
 
 ## Working tree note
 

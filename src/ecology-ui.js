@@ -97,7 +97,7 @@ export class EcologyUI {
  renderLegend(){const el=document.getElementById('route-legend');if(!el)return;
   el.innerHTML=legendRows(this.engine.life.config.routes).map(g=>
    `<div class="legend-group"><p class="legend-head"><i style="background:${TINT[g.kind]}"></i>${g.head}`+
-   `<em>${g.records}${g.chains!==g.records?' / '+g.chains+t('legendChains'):''}</em></p>`+
+   `<em>${g.records}${g.chains!==g.records?' / '+g.chains+' '+t('legendChains'):''}</em></p>`+
    `<div class="legend-names">`+g.names.map(n=>`<p class="legend-name">${n}</p>`).join('')+`</div></div>`).join('');}
  renderMap(){const ctx=this.ctx,w=this.canvas.width,h=this.canvas.height,l=this.engine.life;const xy=p=>[(p[0]+148)/296*w,h-(p[1]+70)/194*h];ctx.fillStyle='#e9e1cc';ctx.fillRect(0,0,w,h);ctx.fillStyle='#a9c3bb';ctx.beginPath();for(let x=-150;x<=150;x+=2){let p=xy([x,3.4*Math.sin(x/72)+14.5]);if(x===-150)ctx.moveTo(...p);else ctx.lineTo(...p);}for(let x=150;x>=-150;x-=2)ctx.lineTo(...xy([x,3.4*Math.sin(x/72)-14.5]));ctx.closePath();ctx.fill();
   ctx.fillStyle='#b1a58a';for(const r of this.engine.navigation.rooms){if(r.y<-70||r.y>125)continue;const p=xy([r.x,r.y]);ctx.fillRect(p[0]-r.hx/296*w,p[1]-r.hy/194*h,r.hx*2/296*w,r.hy*2/194*h);}

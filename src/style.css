@@ -60,6 +60,14 @@ html[lang=en] #loading h1{font-family:Georgia,"Times New Roman",serif;letter-spa
    than a glyph icon, and a serif face at icon size renders 中 as a full-bleed block. */
 #lang-btn{font-family:Georgia,"Times New Roman",serif;font-size:14px;letter-spacing:.5px;padding:0;line-height:1}
 html[lang=zh] #lang-btn{font-family:"Songti SC","Noto Serif CJK SC",serif;font-size:16px}
+/* The voice switch is the first .icon-btn that holds state rather than opening a panel, so there
+   was no existing on-style to copy: it takes the same palette the active view button uses. Hidden
+   until the OS has actually delivered its voice list - an empty list and a list with nothing for
+   the current language are different facts, and only the second one means the button is useless. */
+.icon-btn.active{background:#4d4e3a;color:#f4ead2}
+#voice-btn{font-size:17px;line-height:1;padding:0}
+#voice-btn[hidden],.voice-row[hidden],#voice-audition[hidden]{display:none}
+.audition{background:none;border:1px solid #a89b7c;color:#6a5c3e;font-size:10px;letter-spacing:1px;padding:5px 9px;margin-top:8px}
 /* CJK needs far less tracking than the Latin display type above, or the letters stop forming words. */
 html[lang=zh] .overline,html[lang=zh] .chapter span,html[lang=zh] .tag{letter-spacing:.8px}
 html[lang=zh] .brand h1{font-size:33px;letter-spacing:5px}
