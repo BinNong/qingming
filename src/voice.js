@@ -1,11 +1,16 @@
-// Speaking the generated line. No audio assets ship with this: the voices belong to the operating
-// system, so the same "the visitor's key never touches a server of ours" line holds here — the
-// prose the model wrote is read by a local voice, and never leaves the machine by this path.
+// Speaking the generated line. Two backends behind one `sayLine()`.
+//
+// The operating system's voices stay, and they stay the default: they cost nothing, they need no
+// key, and they are the only thing that works for a reader who has not configured one. When the
+// reader IS on a MiniMax key, the line is synthesised instead (tts.js) - still straight from the
+// browser to the vendor, never through a server of ours, so `dist/` stays static - and the OS
+// voice becomes the fallback for when that call fails.
 //
 // Everything a test can reach is a pure function of the voice list, so voiceFor(), voiceList() and
 // voiceLabel() all take the array as an argument instead of reaching for the global. The wrapper
 // below is the only impure part.
 import {getLang} from './i18n.js';
+import {synthesize,pickVoice} from './tts.js';
 
 const NAME='qm-voice',ON='qm-speech';
 // try-wrapped on both sides, because a browser in private mode throws on localStorage rather than
@@ -19,6 +24,17 @@ export const writeVoice=v=>{lastVoice=String(v||'');try{lastVoice?localStorage.s
 let lastOn=false;
 export const voiceOn=()=>{try{lastOn=localStorage.getItem(ON)==='1';}catch(_){}return lastOn;};
 export const setVoiceOn=v=>{lastOn=!!v;try{lastOn?localStorage.setItem(ON,'1'):localStorage.removeItem(ON);}catch(_){}};
+// A separate key from NAME, deliberately: one holds a vendor voice_id and the other an operating
+// system voice's display name, so a reader who tries both keeps both choices instead of finding the
+// picker reset every time they switch provider. Empty means "let the trade decide" (pickVoice).
+const TTS_STORE='qm-tts-voice';
+let lastTts='';
+export const readTtsVoice=()=>{try{return localStorage.getItem(TTS_STORE)||lastTts;}catch(_){return lastTts;}};
+export const writeTtsVoice=v=>{lastTts=String(v||'');try{lastTts?localStorage.setItem(TTS_STORE,lastTts):localStorage.removeItem(TTS_STORE);}catch(_){}};
+/** Whether the network backend can be used at all. The provider is passed in rather than read
+ *  here: ai-story.js already imports this module, so reaching back for its key would make the two
+ *  import each other. */
+export const ttsReady=(opts={})=>opts.provider?.id==='minimax'&&!!opts.key;
 
 /** zh and en, because those are the two languages the prose is ever written in. Anything else has
  *  to answer null rather than fall back: a sentence generated for the Chinese card is Chinese, and
@@ -99,7 +115,24 @@ export const voicesReady=()=>!!loaded;
  *  `done(true)` fires when the line is actually finished and `done(false)` when something cut it
  *  off. That distinction is the point: a 6.4s line that a 试听 click interrupts half-way through was
  *  never read, and a caller that treats "spoken" as "finished" loses the rest of it for good. */
-let active=null;
+// What is on the line right now, for either backend. `epoch` is a counter rather than a token
+// object: every new line and every hush() retires the one before it, so a synthesis that lands late
+// can tell it is stale without holding on to anything.
+let active=null,clip=null,epoch=0;
+// Whether sound is on the line right now, for the ambience to duck against. It is deliberately NOT
+// derived from `active`: that is only assigned when a caller passed a done callback, and 试听 passes
+// none, so an audition would leave the city at full level under a 6.4-second sentence. `busyId` is a
+// token rather than a bare flag for the same reason `active` and `epoch` are - cancel() delivers the
+// old utterance's error asynchronously, long after the new one started, and without an identity check
+// that late event clears a flag that now belongs to the new line. The watchdog is what makes getting
+// stuck true impossible: an <audio> that is never hushed and never fires `ended` would otherwise
+// leave the ambience ducked for the rest of the session.
+let busyId=null,busySince=0;
+const sounding=who=>{busyId=who;busySince=performance.now();};
+const quiet=who=>{if(busyId===who){busyId=null;busySince=0;}};
+/** True while either backend has sound on the line. A getter, not an event: every path that starts a
+ *  sound has exactly one matching end, because they all funnel through `active`/`clip` already. */
+export const voiceBusy=()=>!!busyId&&performance.now()-busySince<20000;
 export function speak(text,voice,done){
  if(!text||!voice||typeof speechSynthesis==='undefined'||typeof SpeechSynthesisUtterance==='undefined')return false;
  // Release the line we are about to cut off, before cutting it off. The speaking utterance does
@@ -112,25 +145,92 @@ export function speak(text,voice,done){
  u.voice=voice;u.lang=voice.lang;
  // The guard is not only bookkeeping: speak() and hush() release the callback themselves before
  // cancelling, and the browser still fires error at the utterance, so without it the caller would
- // be told twice that a line it has already been released for had finished.
- if(done){active=done;
-  u.addEventListener('end',()=>{if(active!==done)return;active=null;done(true);});
-  u.addEventListener('error',()=>{if(active!==done)return;active=null;done(false);});}
+ // be told twice that a line it has already been released for had finished. `mine` is that guard, and
+ // it is also what keeps a stale utterance's end from clearing the `active` belonging to a newer one.
+ //
+ // One listener per event, not two: tests/voice.mjs models an utterance as holding a single handler
+ // each way, and a second registration would replace the first rather than join it. settle() folds the
+ // ducking flag into the same pair, which is also why 试听 - which passes no done at all - still ducks.
+ const settle=ok=>{const mine=!!done&&active===done;if(mine)active=null;quiet(u);if(mine)done(ok);};
+ u.addEventListener('end',()=>settle(true));
+ u.addEventListener('error',()=>settle(false));
+ if(done)active=done;
+ sounding(u);
  speechSynthesis.speak(u);return true;}
 /** Stop whatever is being read. The mute switch needs this and nothing else: a line runs 6.4s, and
  *  turning the sound off while a card speaks and leaving it to finish is the one behaviour a
  *  button marked "read the line aloud" must not have. It counts as not read, so `done` is told the
  *  line was cut off and the caller can offer it again once the sound is back. */
-export const hush=()=>{const was=active;active=null;try{speechSynthesis?.cancel();}catch(_){}if(was)was(false);};
+export const hush=()=>{epoch++;const was=active;active=null;try{speechSynthesis?.cancel();}catch(_){}if(was)was(false);
+ const c=clip;clip=null;if(c){try{c.el.pause();}catch(_){}c.done(false);}
+ busyId=null;busySince=0;};
 
-/** The whole path from "a line just landed" to "it is being read". It reports whether it started
- *  speaking at all, because the caller has to know: marking a line read that was never spoken -
- *  because the sound was off, or because the list had not arrived - retires it for the session
- *  with no way back, and the reader is left looking at a card that stays silent until they toggle ♪.
- *  Completion, though, is `done`'s job: starting is not finishing. */
-export function sayLine(text,done){
+/** The synthesised line, played. The same three-state contract as speak(): done(true) only when the
+ *  clip really finished, done(false) when something cut it off, and no call at all when it never
+ *  started. A second clip releases the first before it plays, because one line at a time is still
+ *  the rule - and unlike an utterance, pausing an <audio> fires no event at all, so the release has
+ *  to be explicit or the first caller would wait forever for an ending that never arrives. */
+function playClip(url,done){
+ const was=clip;clip=null;if(was){try{was.el.pause();}catch(_){}quiet(was.el);was.done(false);}
+ const el=new Audio(url),live=()=>clip&&clip.el===el;
+ clip={el,done};
+ el.addEventListener('ended',()=>{if(!live())return;clip=null;quiet(el);if(done)done(true);});
+ el.addEventListener('error',()=>{if(!live())return;clip=null;quiet(el);if(done)done(false);});
+ // Autoplay policy is the reason this branch exists: the clip lands a second or two after the click
+ // that opened the card, and a browser that wants a fresh gesture refuses. A refusal is terminal -
+ // see `failed` - because the reader has already had their click and will not get another. Sounding
+ // starts on the resolve, not on the call: play() can be refused, and ducking a line that never plays
+ // would leave the city quiet until the watchdog caught it.
+ el.play()?.then(()=>{if(live())sounding(el);},()=>{if(!live())return;clip=null;quiet(el);if(done)done(false);});
+ return true;}
+
+/** Lines whose synthesis terminally failed: a dead key, a rate limit, a voice id the vendor no
+ *  longer serves, a refused play(). All of them are still true 350ms later, and paint() repaints
+ *  about three times a second - so without this set a failure re-spends a request on every
+ *  repaint, forever, which is the exact bug the "never auto-fire a request" rule was written
+ *  against. An interruption is not a failure and is deliberately not recorded: hush(), the 试听
+ *  button and moving to another figure must all leave the line offerable again. */
+const failed=new Set();
+export const forgetTts=()=>failed.clear();
+
+/** Bumped by every new line and by hush(). A synthesis is a round trip that can land after the
+ *  reader has walked away, and audio for a card that is no longer open is worse than no audio. */
+function sayNetwork(text,done,opts){
+ const mine=++epoch,lang=getLang();
+ // `voiceId` here is whatever the picker is showing, which is a vendor id on the network path and
+ // an OS voice's name on the other; an empty value means "let the trade decide".
+ const voiceId=opts.voiceId||readTtsVoice()||pickVoice(lang,opts.plan?.role,opts.kind);
+ synthesize(text,{key:opts.key,voiceId,lang}).then(audio=>{
+  if(mine!==epoch)return;
+  playClip(audio.url,ok=>{if(ok){if(done)done(true);}else giveUp(text,done);});
+ },()=>{if(mine!==epoch)return;giveUp(text,done);});
+ return true;}
+/** Synthesis failed, so the line goes on the never-ask-again list and is read by the operating
+ *  system instead - now, not on the next repaint, because the fallback is free and instant and the
+ *  reader has already waited a second for audio that is not coming. A machine with no OS voice for
+ *  the language stays silent for this line rather than asking again three times a second. */
+const giveUp=(text,done)=>{failed.add(text);
+ const voice=voiceFor(getLang(),voiceListNow(),readVoice());
+ if(voice&&speak(text,voice,done))return;
+ if(done)done(false);};
+
+/** The whole path from "a line just landed" to "it is being read". It reports whether it started at
+ *  all, because the caller has to know: marking a line read that was never spoken - because the
+ *  sound was off, or because the list had not arrived - retires it for the session with no way back,
+ *  and the reader is left looking at a card that stays silent until they toggle ♪.
+ *  Completion, though, is `done`'s job: starting is not finishing.
+ *  With `opts` the answer becomes "committed to being read": the network path returns true the
+ *  moment the request is sent and settles a second later. That widening is safe because the caller
+ *  only ever asks the boolean to clear `reading` when it is false. */
+export function sayLine(text,done,opts={}){
  if(!text||!voiceOn())return false;
+ if(ttsReady(opts)&&!failed.has(text))return sayNetwork(text,done,opts);
  const voice=voiceFor(getLang(),voiceListNow(),readVoice());
  if(!voice)return false;
  return speak(text,voice,done);}
+/** The 试听 button asks for the voice the picker is showing, so it goes around both the mute switch
+ *  and the never-ask-again list: a reader who picked a voice and pressed play has not been refused. */
+export function audition(text,opts={}){
+ if(ttsReady(opts))return sayNetwork(text,null,opts);
+ return speak(text,voiceFor(getLang(),voiceListNow(),opts.voiceId||readVoice()));}
 export const voiceListNow=()=>loaded||[];

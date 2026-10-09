@@ -47,3 +47,6 @@ qm-*.png
 /.vercel/
 .vercel
 .env*
+
+# Machine-local notes, one of which carries a login in plain text. Never commit.
+remote_server.md

@@ -56,10 +56,34 @@ lblLine:['墨线','Ink outlines'],
 lblPaper:['绢纹','Silk texture'],
 lblWalk:['步行起点','Walking location'],
 lblVoice:['嗓音','Speaking voice'],
+// The picker's first entry once the reader is on a synthesised voice: empty means the trade decides.
+// One label, not one per voice, is why the rest can carry their own names below.
+voiceAuto:['随人物','Follow the person'],
+// The synthesised voices, keyed by the slug in tts.js VOICES. These are the vendor's own
+// descriptions of its system voices, translated rather than translated-through-english(): an
+// English label that arrived as an English string would still put Han in the English picker.
+vReliable:['沉稳','Composed'],
+vQingse:['青涩青年','Young Man'],
+vSouthern:['南方小哥','Southern Youth'],
+vGentleman:['温润','Gentle'],
+vSincere:['真诚','Sincere'],
+vAnnouncer:['洪亮','Announcer'],
+vRadio:['清朗','Clear Radio'],
+vMature:['沉稳女声','Steady Woman'],
+vWarm:['温暖','Warm'],
+vBoy:['童声','Boy'],
+vElder:['苍老','Elder'],
+vElegant:['温雅','Elegant'],
 // The audition reads a real line of the right length, not "test one two": a voice has to be judged
 // on a sentence like the ones it will actually be given, and this one measures 6.4s in Ting-Ting.
 voiceAudition:['这担子沉得很，脚下这两百步，你得走到日头偏西才到得了渡口。','This load is heavy, and those two hundred paces will not be done before the sun is past the west.'],
 btnAudition:['试听','Audition'],
+// The city bed, next to the voice that has to sit above it. Two controls because they answer different
+// questions - "may I have sound at all" and "how much of it" - and a slider because a bed a reader
+// cannot turn down is a bed they turn off and never open again.
+tglAmbience:['市声','Ambience'],
+lblAmbVol:['音量','Volume'],
+ambPending:['轻触页面即可听到','Tap anywhere to hear it'],
 btnWalk:['从此处步行','Start walking here'],
 toolsNote:['门、楼梯与家具皆为实心。按 E 开关门，按 R 回到起点。','Doors, stairs and furniture are solid. E opens doors; R returns to your starting point.'],
 tglMotion:['城市活动','Animate the city'],

@@ -30,7 +30,9 @@ globalThis.speechSynthesis={getVoices:()=>fakeVoices,
   if(ending==='end')u.h?.end?.();else if(ending==='error')u.h?.error?.();}};
 globalThis.SpeechSynthesisUtterance=class{constructor(text){this.text=text;}addEventListener(ev,fn){(this.h||(this.h={}))[ev]=fn;}};
 
-const {voiceFor,voiceList,voiceLabel,speak,sayLine,hush,onVoices,voicesReady,voiceListNow,voiceOn,setVoiceOn,readVoice,writeVoice}=await import('../src/voice.js');
+const {voiceFor,voiceList,voiceLabel,speak,sayLine,hush,onVoices,voicesReady,voiceListNow,voiceOn,setVoiceOn,readVoice,writeVoice,audition,ttsReady,readTtsVoice,writeTtsVoice,forgetTts}=await import('../src/voice.js');
+const {buildTts,parseTts,pickVoice,ttsVoices,MODEL}=await import('../src/tts.js');
+const {setLang}=await import('../src/i18n.js');
 const REAL=JSON.parse(await read('tests/fixtures/voices-macos.json'));
 const html=await read('index.html'),css=await read('src/style.css'),app=await read('src/app.js');
 const story=await read('src/ai-story.js');
@@ -228,8 +230,13 @@ const guard=story.replace(/\s+/g,' ');
 // interrupted sentence is unreachable for the rest of the session.
 assert.match(guard,/if\(!this\.spoken\.has\(state\.line\)&&this\.reading!==state\.line\)/,
  'the mark must be keyed on the text and skip a line already in flight; keyed on the cache key, 换一句 reuses one key for a different line and is swallowed');
-assert.match(guard,/sayLine\(state\.line,finished=>\{this\.reading=null;if\(finished\)this\.spoken\.add\(state\.line\);\}\)/,
+assert.match(guard,/sayLine\(state\.line,finished=>\{this\.reading=null;if\(finished\)this\.spoken\.add\(state\.line\);\}/,
  'and committed only once the utterance finishes - an interrupted line was never read');
+// The synthesised voice needs two things voice.js cannot read for itself - the visitor's key and the
+// trade the voice is picked from - and asking for them the other way round would make ai-story.js and
+// voice.js import each other. So the card hands both over at the call site, every paint.
+assert.match(guard,/sayLine\(state\.line,finished=>\{[^]*?\}\s*,\s*\{key:readKey\(\),provider:readProvider\(\),plan:this\.current\?\.plan,kind:this\.current\?\.hit\?\.kind\}\)/,
+ 'the network path is chosen from the key and the plan, passed in rather than imported - a circular import between the card and the voice module would put one of them in its temporal dead zone');
 assert.match(guard,/if\(!started\)this\.reading=null;/,
  'sayLine does not call done when it declines to speak, so the marker must come back off here - '+
  'otherwise one line rendered while muted stays "reading" for the session and is never offered again');
@@ -278,6 +285,167 @@ hush();
 assert.equal(cancels.length,2,'the mute cancels what is playing, not merely what comes next');
 hush();
 assert.equal(cancels.length,3,'and it is safe to call with nothing in flight');
+
+// --- The synthesised backend. Everything above it is the fallback, and none of it changed; what is
+// new is that a line can cost a request and a second of waiting, which brings three failure modes a
+// local voice does not have: a request that never leaves, a line re-asked on every 350ms repaint,
+// and audio that arrives after the reader has walked away.
+const clips=[],calls=[];
+let blobs=0,hold=null;
+globalThis.Audio=class{constructor(src){this.src=src;this.stops=0;this.h={};clips.push(this);}
+ addEventListener(k,fn){(this.h||(this.h={}))[k]=fn;}
+ pause(){this.stops++;}
+ play(){return Promise.resolve();}};
+URL.createObjectURL=()=>'blob:fake/'+(++blobs);
+URL.revokeObjectURL=()=>{};
+// 'mp3' in the first four bytes, which is what a browser sniffs before it will play anything.
+const MP3='4944330400000000';
+const reply=()=>({base_resp:{status_code:0,status_msg:'success'},data:{audio:MP3,status:2}});
+const goodFetch=async(url,init)=>{calls.push({url,init});if(hold)return hold;return{ok:true,status:200,json:async()=>reply()};};
+globalThis.fetch=goodFetch;
+const tick=()=>new Promise(r=>setTimeout(r,0));
+const MINIMAX={key:'a-key',provider:{id:'minimax'},plan:{role:'porter'},kind:'person'};
+
+// The request, because the whole reason this backend exists where it does is the header set. The
+// allowlist is per host, not per path, and it permits exactly these two headers - so a third one
+// named anthropic-* would put the speech behind the same proxy the prose needs and it does not.
+const req=buildTts('一句台词',{key:'a-key',voiceId:'clever_boy',lang:'zh'});
+assert.equal(req.url,'https://api.minimax.cn/v1/t2a_v2');
+assert.deepEqual(Object.keys(req.headers).sort(),['authorization','content-type'],
+ 'two headers, and only two: MiniMax refuses anthropic-version and anthropic-dangerous-direct-browser-access');
+assert.equal(req.headers.authorization,'Bearer a-key');
+const payload=JSON.parse(req.body);
+assert.equal(payload.model,MODEL);
+assert.equal(payload.output_format,'hex','hex, not the 24-hour url: a blob the reader can replay beats a link that expires');
+assert.equal(payload.stream,false);
+assert.equal(payload.audio_setting.format,'mp3');
+assert.equal(payload.voice_setting.voice_id,'clever_boy');
+assert.equal(JSON.parse(buildTts('x',{key:'k',voiceId:'v',lang:'en'}).body).language_boost,'English','an English line must not be read by a Chinese voice model');
+
+// A 200 that is not the answer is the failure this file exists to prevent. An invalid voice_id comes
+// back as status_code 2013 inside a perfectly good HTTP response, so res.ok is not the check.
+assert.deepEqual([...parseTts(reply())],[0x49,0x44,0x33,0x04,0,0,0,0]);
+assert.equal(parseTts({base_resp:{status_code:2013,status_msg:'invalid parameter'},data:{audio:MP3}}),null,
+ 'a voice id the vendor does not serve is a 200 with an error in it');
+assert.equal(parseTts({base_resp:{status_code:0},data:{}}),null);
+assert.equal(parseTts({base_resp:{status_code:0},data:{audio:'abc'}}),null,'an odd-length hex is a truncated body, not audio');
+assert.equal(parseTts({base_resp:{status_code:0},data:{audio:'zzzz'}}),null,'and non-hex is a body that is not this API');
+assert.equal(parseTts(null),null);
+
+// The trade picks the voice, from data that already exists - no per-figure authoring, and no reader
+// who has opened a data file needs to notice. The bridge is the one deliberate liberty.
+assert.equal(pickVoice('zh','porter'),'male-qn-qingse');
+assert.equal(pickVoice('zh','woman'),'female-chengshu');
+assert.equal(pickVoice('zh','child'),'clever_boy');
+assert.equal(pickVoice('zh','merchant'),'Chinese (Mandarin)_Reliable_Executive');
+assert.equal(pickVoice('zh',null,'boat'),'Chinese (Mandarin)_Sincere_Adult','a boat has no role of its own');
+assert.equal(pickVoice('zh',null,'surface'),'Chinese (Mandarin)_Kind-hearted_Elder','Hongqiao is the one subject that never changes, so it gets the voice that reads a whole scroll');
+assert.equal(pickVoice('zh','nosuchtrade'),'Chinese (Mandarin)_Reliable_Executive','an unknown trade falls back rather than going quiet');
+assert.equal(pickVoice('en','porter'),'English_Graceful_Lady');
+assert.deepEqual(ttsVoices('en').map(v=>v.key),['vElegant'],'a Chinese id reads English prose in a Chinese accent');
+assert.ok(ttsVoices('zh').length>=10,'and the Chinese card gets a choice of voices');
+
+// Availability is the provider and the key, and nothing else - a reader on Anthropic keeps the OS
+// voices they had, with nothing new to configure and nothing new that can fail.
+assert.equal(ttsReady({provider:{id:'minimax'},key:'k'}),true);
+assert.equal(ttsReady({provider:{id:'anthropic'},key:'k'}),false);
+assert.equal(ttsReady({provider:{id:'minimax'},key:''}),false);
+assert.equal(ttsReady(),false);
+
+// One line, one request, and the card's repaint cannot start a second.
+setVoiceOn(true);ending='end';spoken.length=0;clips.length=0;calls.length=0;
+const finished=[];
+assert.equal(sayLine('第一句',v=>finished.push(v),MINIMAX),true,'a committed line reports true synchronously, or the card would clear its in-flight mark');
+assert.equal(calls.length,1);
+assert.equal(JSON.parse(calls[0].init.body).voice_setting.voice_id,'male-qn-qingse');
+await tick();
+assert.equal(clips.length,1,'and one clip when it lands');
+assert.equal(spoken.length,0,'the OS voice does not also read it');
+clips[0].h.ended();
+assert.deepEqual(finished,[true],'a clip that ran to its end is a line that was read');
+
+// 换一句 reuses one cache key for a different sentence, which is why the clip cache is keyed on the
+// text. Keyed on the portrait instead, this would answer the second request with the first's audio.
+assert.equal(sayLine('第二句',null,MINIMAX),true);
+await tick();
+assert.equal(calls.length,2,'a different line is a different request, whatever the card calls it');
+// Same line, same voice, already synthesised: free to replay, and the reader pressing ♪ twice is not
+// charged twice for it.
+const cacheAt=calls.length,clipsAt=clips.length;
+assert.equal(sayLine('第一句',null,MINIMAX),true);
+await tick();
+assert.equal(calls.length,cacheAt,'a line already in the clip cache does not go to the network again');
+assert.equal(clips.length,clipsAt+1,'but it still plays - the cache is audio, not a once-only');
+
+// The picker stores a vendor id under its own key, so a reader who tries both backends keeps both
+// choices instead of finding the picker reset every time they switch provider.
+mem.delete('qm-voice');
+assert.equal(readTtsVoice(),'','an unset voice means the trade decides');
+writeTtsVoice('clever_boy');
+assert.equal(readTtsVoice(),'clever_boy');
+assert.equal(mem.get('qm-tts-voice'),'clever_boy');
+assert.equal(mem.has('qm-voice'),false,'and the operating system voice is untouched, not overwritten');
+calls.length=0;
+sayLine('第三句',null,MINIMAX);
+await tick();
+assert.equal(JSON.parse(calls[0].init.body).voice_setting.voice_id,'clever_boy','an explicit choice beats the trade');
+writeTtsVoice('');mem.clear();assert.equal(readTtsVoice(),'','clearing removes the record rather than storing an empty one');
+setVoiceOn(true);   // mem.clear() took the mute switch with it, and voiceOn() reads storage every call
+
+// A failure that is still true 350ms later. This is the assertion the whole `failed` set exists for:
+// paint() runs three times a second, and without it every one of those repaints spends a request.
+globalThis.fetch=async()=>{calls.push({url:'x'});throw new Error('offline');};
+spoken.length=0;clips.length=0;calls.length=0;
+const failedDone=[];
+assert.equal(sayLine('断网的台词',v=>failedDone.push(v),MINIMAX),true,'the attempt is still reported as started');
+await tick();
+assert.deepEqual(failedDone,[true],'and reported as read, because the fallback is what read it - the card marks the line done and never asks again');
+assert.equal(spoken.length,1,'the operating system voice reads it instead - free, instant, and already there');
+assert.equal(spoken[0].voice,'婷婷');
+assert.equal(clips.length,0);
+// Now the expensive part: the card repaints, and the OS voice is not there to carry it. An empty
+// list will not do it - voice.js treats an empty getVoices() as "not delivered yet" and keeps the
+// one it has, which is right for a real browser. A machine with no voice for THIS language is the
+// case that has to go silent.
+fakeVoices=[{name:'Nominal',lang:'ja-JP',localService:true}];onChanged();spoken.length=0;
+for(let i=0;i<10;i++)assert.equal(sayLine('断网的台词',null,MINIMAX),false,'a line that failed is not asked for again');
+assert.equal(calls.length,1,'ten attempts, one request: this is the bug the never-ask-again list is for');
+assert.equal(spoken.length,0,'and silence when there is no OS voice to fall back to, rather than a request storm');
+forgetTts();
+sayLine('断网的台词',null,MINIMAX);
+await tick();
+assert.equal(calls.length,2,'turning the voice off and on is how a reader retries a line they have seen fail');
+fakeVoices=REAL;onChanged();globalThis.fetch=goodFetch;
+
+// Audio that lands after the reader has moved on. paint() is not the only thing that starts a line -
+// the 试听 button and ♪ both do - and a synthesis is a round trip that can outlast all three.
+hold={ok:true,status:200,json:async()=>reply()};
+clips.length=0;spoken.length=0;
+sayLine('迟到的一句',null,MINIMAX);
+sayLine('接上的一句',null,MINIMAX);
+hold=null;await tick();
+assert.equal(clips.length,1,'only the newest line is allowed to play');
+assert.equal(clips[0],clips.at(-1));
+const heldBack=clips.length;
+sayLine('静音前的一句',null,MINIMAX);
+hush();await tick();
+assert.equal(clips.length,heldBack,'and hush() retires the one still in flight, exactly as it retires a speaking utterance');
+globalThis.fetch=async(url,init)=>{calls.push({url,init});return{ok:true,status:200,json:async()=>reply()};};
+spoken.length=0;clips.length=0;
+assert.equal(audition('试听一句',MINIMAX),true,'the audition is a request the reader made, so it goes around both the mute and the never-ask-again list');
+await tick();
+assert.equal(clips.length,1,'and it plays even with the sound switched off');
+mem.clear();
+
+// The picker has to offer the vendor's voices while that path is live, and the OS list when it is
+// not - a picker full of voices the synth path never uses is worse than no picker.
+assert.match(app,/const ttsMode=\(\)=>ttsReady\(/,'which of the two lists the picker shows is decided in one place');
+assert.match(app,/\?writeTtsVoice\(e\.target\.value\):writeVoice\(e\.target\.value\)/,'and the same select writes to the matching key');
+for(const id of ['#qm-provider','#qm-url','#qm-key']){
+ const at=app.indexOf(`$('${id}').onchange`);
+ assert.ok(at>0,`${id} still has its change handler`);
+ assert.ok(app.slice(at,at+220).includes('fillVoices()'),`changing ${id} can change the voice list, so it has to refill it`);}
+assert.match(app,/if\(ttsMode\(\)\)audition\(/,'the audition speaks in whichever voice the card is about to use');
 
 // --- The control and its styles.
 assert.match(app,/onVoices\(fillVoices\)/,'the header control cannot exist before the OS answers');

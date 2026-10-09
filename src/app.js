@@ -1,11 +1,13 @@
 import {english} from './english.js';
-import {t,T,E,applyStatic,applyLang,getLang,onLang} from './i18n.js';
+import {t,T,E,applyStatic,applyLang,getLang,onLang,district} from './i18n.js';
 import {V,world,mix,Walker} from './simulation.js';
 import {loadCity} from './loader.js';
 import {EcologyUI} from './ecology-ui.js';
 import {InspectUI} from './inspect.js';
 import {AIStoryUI,readKey,writeKey,readProvider,writeProvider,providerList,readUrl,writeUrl} from './ai-story.js';
-import {voiceFor,voiceList,voiceLabel,voiceListNow,voiceOn,setVoiceOn,readVoice,writeVoice,speak,hush,onVoices} from './voice.js';
+import {voiceFor,voiceList,voiceLabel,voiceListNow,voiceOn,setVoiceOn,readVoice,writeVoice,speak,hush,onVoices,audition,ttsReady,readTtsVoice,writeTtsVoice,forgetTts} from './voice.js';
+import {ttsVoices} from './tts.js';
+import {startAmbience,stopAmbience,updateAmbience,ambienceOn,setAmbienceOn,ambienceVol,setAmbienceVol,ambienceRunning,sceneDistrict,resetScene} from './ambience.js';
 import {ThreeCityEngine} from './three-engine.js';
 
 
@@ -47,42 +49,92 @@ function relabelChrome(){
 $('#lang-btn').textContent=getLang()==='zh'?'EN':'中';
 $('#lang-btn').onclick=()=>{applyLang(getLang()==='zh'?'en':'zh');$('#lang-btn').textContent=getLang()==='zh'?'EN':'中';};
 $('#tools-btn').onclick=()=>$('#tools').classList.toggle('open');
-// The voice switch stays hidden until the OS hands over its voice list. A list that has not
-// arrived and a list with nothing for the current language are different facts: the first lasts
-// about three seconds on every page load, the second is the only one that makes the button useless.
+// The voice switch stays hidden until there is something to switch to. On an OS that list arrives
+// late - and a list that has not arrived and a list with nothing for the current language are
+// different facts: the first lasts about three seconds on every page load, the second is the only
+// one that makes the button useless. With a MiniMax key there is a third answer, and it is there on
+// the first frame, because it never has to ask the operating system for anything.
 let voiceBuilt='';
-const fillVoices=()=>{const sel=$('#voice-pick'),list=voiceList(voiceListNow(),getLang()),pick=voiceFor(getLang(),voiceListNow(),readVoice());
+const ttsMode=()=>ttsReady({provider:readProvider(),key:readKey()});
+const fillVoices=()=>{const sel=$('#voice-pick'),net=ttsMode(),lang=getLang();
+ const list=net?[]:voiceList(voiceListNow(),lang),pick=net||voiceFor(lang,voiceListNow(),readVoice());
  const hide=!pick;for(const el of ['#voice-btn','#voice-audition','#voice-row'])$(el).hidden=hide;
  if(!pick){sel.textContent='';voiceBuilt='';return;}
  // Keyed on the names as well as the length: a list delivered in batches can change without
- // changing size, and a stale picker would offer a voice the browser no longer enumerates.
- const key=getLang()+list.map(v=>v.name).join();
+ // changing size, and a stale picker would offer a voice the browser no longer enumerates. The
+ // synthesised list changes with the language instead - a Chinese voice id reads an English line in
+ // a Chinese accent - so it keys on that.
+ const key=net?'tts:'+lang:lang+list.map(v=>v.name).join();
  if(voiceBuilt!==key){voiceBuilt=key;sel.textContent='';
-  for(const v of list){const o=document.createElement('option');o.value=v.name;o.textContent=voiceLabel(v)+' · '+v.lang;sel.appendChild(o);}}
- sel.value=pick.name;};
+  if(net){const auto=document.createElement('option');auto.value='';auto.textContent=t('voiceAuto');sel.appendChild(auto);
+   for(const v of ttsVoices(lang)){const o=document.createElement('option');o.value=v.id;o.textContent=t(v.key);sel.appendChild(o);}}
+  else for(const v of list){const o=document.createElement('option');o.value=v.name;o.textContent=voiceLabel(v)+' · '+v.lang;sel.appendChild(o);}}
+ sel.value=net?(readTtsVoice()||''):pick.name;};
 const markVoice=on=>{$('#voice-btn').classList.toggle('active',on);$('#voice-btn').setAttribute('aria-pressed',on?'true':'false');};
 markVoice(voiceOn());
 // Off stops the line already playing, not the next one: it runs 6.4s, and a switch that silences the
 // future while the present keeps talking is not a switch. On drops the "already read" mark, so it
 // is also the way to hear a line twice without spending another request on it.
 $('#voice-btn').onclick=()=>{const on=!voiceOn();setVoiceOn(on);markVoice(on);
+ // Either way the never-ask-again list goes too. A line that fell back to the OS voice because the
+ // key was wrong ten seconds ago is a line this reader has every reason to hear again.
+ forgetTts();
  if(on)inspectUI?.story?.forget();else hush();};
-$('#voice-pick').onchange=e=>writeVoice(e.target.value);
+$('#voice-pick').onchange=e=>{forgetTts();ttsMode()?writeTtsVoice(e.target.value):writeVoice(e.target.value);};
 // The audition is a deliberate request to hear this voice, so it plays whatever ♪ says - that
 // switch is labelled for the portrait's line, not for a master mute, and a picker you cannot
-// preview is not a picker.
-$('#voice-audition').onclick=()=>speak(t('voiceAudition'),voiceFor(getLang(),voiceListNow(),$('#voice-pick').value));
+// preview is not a picker. It also ignores the never-ask-again list, for the same reason: the
+// reader asked. It does cost a request on the synthesised path, which is why it stays a button and
+// is not something the card does to itself.
+$('#voice-audition').onclick=()=>{const picked=$('#voice-pick').value;
+ if(ttsMode())audition(t('voiceAudition'),{provider:readProvider(),key:readKey(),voiceId:picked});
+ else speak(t('voiceAudition'),voiceFor(getLang(),voiceListNow(),picked));};
 onVoices(fillVoices);onLang(fillVoices);
 // The visitor's own key, kept in localStorage like the language choice. It is sent straight to
 // the selected provider from the browser and never touches this repository or any server of ours.
-$('#qm-key').value=readKey();$('#qm-key').onchange=e=>{writeKey(e.target.value);toast(t('aiKeyNote'));};
+$('#qm-key').value=readKey();$('#qm-key').onchange=e=>{writeKey(e.target.value);fillVoices();forgetTts();toast(t('aiKeyNote'));};
 // The picker is filled in JS rather than HTML: a custom endpoint means a proxy answers the
 // preflight, so the browser:false providers become reachable and must appear then, and only then.
 const fillProviders=()=>{const sel=$('#qm-provider');sel.textContent='';for(const p of providerList()){const o=document.createElement('option');o.value=p.id;o.textContent=p.label;sel.appendChild(o);}sel.value=readProvider().id;};
 fillProviders();$('#qm-url').value=readUrl();
-$('#qm-url').onchange=e=>{writeUrl(e.target.value);e.target.value=readUrl();fillProviders();inspectUI?.close();toast(t('aiKeyNote'));};
-$('#qm-provider').onchange=e=>{writeProvider(e.target.value);inspectUI?.close();toast(t('aiKeyNote'));};$('#fullscreen').onclick=async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen();}catch{toast(t('toastFull'));}};
+// Provider, endpoint and key all decide which of the two voice lists the picker is showing, so each
+// of them has to refill it - otherwise choosing MiniMax leaves a picker full of operating system
+// voices that the synth path will never use.
+$('#qm-url').onchange=e=>{writeUrl(e.target.value);e.target.value=readUrl();fillProviders();fillVoices();forgetTts();inspectUI?.close();toast(t('aiKeyNote'));};
+$('#qm-provider').onchange=e=>{writeProvider(e.target.value);fillVoices();forgetTts();inspectUI?.close();toast(t('aiKeyNote'));};$('#fullscreen').onclick=async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen();}catch{toast(t('toastFull'));}};
 $('#pixel-ratio').onchange=e=>{if(!engine)return;engine.maxPixelRatio=e.target.value==='native'?Infinity:+e.target.value;engine.resize();};$('#quality').onchange=e=>{engine?.setQuality(e.target.value);toast(e.target.selectedOptions[0].textContent);};$('#sun').oninput=e=>{const h=+e.target.value;$('#hour').textContent=String(Math.floor(h)).padStart(2,'0')+':'+String(Math.round((h%1)*60)).padStart(2,'0');if(engine){engine.sunHour=h;engine.shadowDirty=true;}};$('#ink').oninput=e=>{engine&&(engine.ink=+e.target.value);$('#ink-value').textContent=Math.round(+e.target.value*100)+'%';engine?.style.set({enabled:+e.target.value});};$('#motion').onchange=e=>{engine&&(engine.animate=e.target.checked);};document.querySelectorAll('[data-layer]').forEach(el=>el.onchange=()=>{if(engine){el.checked?engine.hidden.delete(el.dataset.layer):engine.hidden.add(el.dataset.layer);engine.shadowDirty=true;}});
+// The city bed, and the only place an AudioContext is ever built here: inside a click. One made without
+// a user gesture starts suspended and stays suspended, which would be a checked box over a silent city.
+// The slider stays live instead of appearing when the switch is on, which is also why it needs none of
+// the [hidden] overrides the voice row needs against `.panel label{display:flex}`.
+$('#ambience').checked=ambienceOn();
+const showVol=v=>{$('#ambience-vol-value').textContent=Math.round(v*100)+'%';};
+$('#ambience-vol').value=ambienceVol();showVol(ambienceVol());
+$('#ambience-vol').oninput=e=>{const v=+e.target.value;setAmbienceVol(v);showVol(v);};
+$('#ambience').onchange=async e=>{setAmbienceOn(e.target.checked);
+ if(e.target.checked)await startAmbience();else stopAmbience();};
+// A preference restored from storage cannot be honoured at load, and the switch being the only way to
+// start it was the bug: reload with 市声 already on and you got a ticked box over a silent city, and the
+// only way out was to untick and retick THIS switch - which nobody thinks to try. So the first gesture
+// anywhere in the page builds the context, and the box means what it says. This is still a user gesture
+// and still inside a handler, so the autoplay rule holds.
+if(ambienceOn()&&!ambienceRunning()){
+ const arm=()=>{document.removeEventListener('pointerdown',arm);
+  document.removeEventListener('keydown',arm);showScene();startAmbience();};
+ document.addEventListener('pointerdown',arm);
+ document.addEventListener('keydown',arm);}
+// The place name comes from animate() and not from here: `engine` does not exist yet at this line, and
+// setView() only starts a 1600ms flight, so reading it there would name the destination while the reader
+// is still over the old one. Written only when it actually changes - a textContent per frame is sixty
+// layout invalidations a second, and this row is the only thing in the panel that moves on its own.
+let shownScene='';
+const showScene=()=>{const d=sceneDistrict();
+ const text=!ambienceRunning()&&ambienceOn()?t('ambPending'):d?district(d):'';
+ if(text!==shownScene){shownScene=text;$('#ambience-scene').textContent=text;}};
+// applyLang fires every onLang hook twice, so this has to be idempotent - and the district id itself is
+// language-independent while the string on screen is not, so the cache has to be dropped rather than
+// compared.
+onLang(()=>{shownScene='\0';showScene();resetScene();});
 async function saveShot(){
  if(transition){camera=transition.to;transition=null;}engine.captureSize=[3840,2160];engine.render(camera,engine.clockLast);
  const file=`view-${String(active+1).padStart(2,'0')}-${engine.style.settings.enabled?engine.style.preset:'off'}-4k.png`,blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
@@ -122,7 +174,7 @@ function animate(now){if(engine?.exporting){if(!window.__singleFrame)requestAnim
  if(mode==='walk'&&walker){const room=walker.step(camera,keys,dt);engine.playerPosition=walker.position;$('#walk-room').textContent=room?T(room.name)+' · '+t(walker.position[2]>room.lo+2.0?'walkUp':'walkDown'):t('walkBianjing');const door=engine.navigation.nearestDoor(walker.position);$('#door-hint').textContent=door?t('doorHint',t(door.target>.5?'verbClose':'verbOpen'),T(door.mo.label)):'';}
  if(mode==='fly'&&keys.size){let f=V.norm(V.sub(camera.target,camera.eye)),r=V.norm(V.cross(f,[0,1,0])),speed=dt*(keys.has('ShiftLeft')?30:9),d=[0,0,0];if(keys.has('KeyW'))d=V.add(d,V.scale(f,speed));if(keys.has('KeyS'))d=V.add(d,V.scale(f,-speed));if(keys.has('KeyD'))d=V.add(d,V.scale(r,speed));if(keys.has('KeyA'))d=V.add(d,V.scale(r,-speed));if(keys.has('KeyE'))d[1]+=speed;if(keys.has('KeyQ'))d[1]-=speed;camera.eye=V.add(camera.eye,d);camera.target=V.add(camera.target,d);if(camera.eye[1]<.9){let dd=.9-camera.eye[1];camera.eye[1]+=.9-camera.eye[1];camera.target[1]+=dd;}}
  if(tour&&now-tourStart>9500){setView(active+1);tourStart=now;}
- try{ecologyUI?.update(dt);inspectUI?.update();const stats=engine.renderIfChanged(camera,now/1000);if(stats)frames++;if(now-lastPerf>1800){$('#performance').textContent=stats?t('perfFmt',(frames*1000/(now-lastPerf)).toFixed(1),stats.totalDraws||stats.draws,((stats.totalTriangles||stats.triangles)/1000000).toFixed(1))+(stats.passTimes?' · '+Object.entries(stats.passTimes).map(([k,v])=>k+' '+v.toFixed(1)).join(' '):''):t('perfPaused');frames=0;lastPerf=now;}if(stats)window.__stats=stats;window.__camera=camera;if(!ready){ready=true;window.__ready=true;progress(1,t('loadReady'));$('#loading').style.opacity=0;setTimeout(()=>$('#loading').style.display='none',750);}if(!window.__singleFrame)requestAnimationFrame(animate);}catch(e){error(e);}}
+ try{updateAmbience(engine,camera.eye,{key:readKey(),provider:readProvider(),now});showScene();ecologyUI?.update(dt);inspectUI?.update();const stats=engine.renderIfChanged(camera,now/1000);if(stats)frames++;if(now-lastPerf>1800){$('#performance').textContent=stats?t('perfFmt',(frames*1000/(now-lastPerf)).toFixed(1),stats.totalDraws||stats.draws,((stats.totalTriangles||stats.triangles)/1000000).toFixed(1))+(stats.passTimes?' · '+Object.entries(stats.passTimes).map(([k,v])=>k+' '+v.toFixed(1)).join(' '):''):t('perfPaused');frames=0;lastPerf=now;}if(stats)window.__stats=stats;window.__camera=camera;if(!ready){ready=true;window.__ready=true;progress(1,t('loadReady'));$('#loading').style.opacity=0;setTimeout(()=>$('#loading').style.display='none',750);}if(!window.__singleFrame)requestAnimationFrame(animate);}catch(e){error(e);}}
 (async()=>{try{let data=await loadCity(progress);let opts=new URLSearchParams(location.search);engine=new ThreeCityEngine(canvas,data);await engine.loadDetails(progress);if(opts.get('quality'))engine.setQuality(opts.get('quality'));engine.lighting(engine.camera);progress(.94,t('loadPrograms'));await engine.renderer.compileAsync(engine.scene,engine.camera);
 // Exercise shadow and outline materials too; they are created lazily by their passes.
 engine.animate=false;

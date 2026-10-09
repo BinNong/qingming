@@ -68,6 +68,12 @@ html[lang=zh] #lang-btn{font-family:"Songti SC","Noto Serif CJK SC",serif;font-s
 #voice-btn{font-size:17px;line-height:1;padding:0}
 #voice-btn[hidden],.voice-row[hidden],#voice-audition[hidden]{display:none}
 .audition{background:none;border:1px solid #a89b7c;color:#6a5c3e;font-size:10px;letter-spacing:1px;padding:5px 9px;margin-top:8px}
+.amb-row{font-size:11px;justify-content:flex-start;gap:4px;margin:18px 0 2px}
+html[lang=zh] .amb-row{font-size:12px}
+/* Filled from JS, never by applyStatic - see app.js. No data-i18n, because a language toggle would
+   overwrite the district name with the chrome label and only a hook could put it back. */
+.amb-scene{margin:9px 0 0;font-size:10px;letter-spacing:1px;color:#8a6a3e;min-height:13px}
+.amb-scene:empty{display:none}
 /* CJK needs far less tracking than the Latin display type above, or the letters stop forming words. */
 html[lang=zh] .overline,html[lang=zh] .chapter span,html[lang=zh] .tag{letter-spacing:.8px}
 html[lang=zh] .brand h1{font-size:33px;letter-spacing:5px}

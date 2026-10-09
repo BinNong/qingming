@@ -189,7 +189,36 @@ on `statRows()` so nobody reinstates them as if they were a scoreboard.
 
 ## Speaking the generated line
 
-`src/voice.js` reads the one line of dialogue the model already writes (`STORY_SCHEMA.line`, rendered at `#ai-line`) aloud, using voices the **operating system** provides. That is the whole reason it is cheap: no audio asset ships, nothing is fetched, and the prose the model wrote never leaves the machine on this path — the same line the visitor's API key sits on.
+`src/voice.js` reads the one line of dialogue the model already writes (`STORY_SCHEMA.line`, rendered at `#ai-line`) aloud. It has **two** backends behind one `sayLine()`.
+
+**The synthesised one** (`src/tts.js`, live when the panel's provider is MiniMax and a key is set) posts the line to `POST https://api.minimax.cn/v1/t2a_v2` and plays the returned mp3. The visitor's key goes from the browser to the vendor directly, so `dist/` is still a pure static bundle and no server of ours is involved. **This path does send the line off the machine** — that is what buying a voice costs, and it is not the same bargain as the OS voice below. A 19-character line bills 36 characters, about 0.01 元; measured 2026-10-09 it came back in **0.94s** as 57012 bytes of 128kbps mp3. The unit price behind that is **3.5 元/万字符 for `hd`** (2.0 for `turbo`) with **1 汉字 = 2 字符**, per the vendor's own `minimax-tts-gen` material — so the number is checkable rather than observed once.
+
+**The OS one** stays, and it is the fallback for every failure — no key, a bad key, a rate limit, a voice id the vendor no longer serves, a refused `play()`, or a machine with no voice for the language. It needs nothing and costs nothing, which is why a reader who never configures a key is unaffected by any of this.
+
+### Why the speech needs no proxy and the prose does
+
+The `browser:false` verdict on MiniMax above is about **headers, not paths**. Probing all three of `api.minimax.{cn,chat,com}` against both `/v1/t2a_v2` and `/v1/text/chatcompletion_v2` on 2026-10-09 returned a byte-identical `access-control-allow-headers` every time: `Authorization` and `Content-Type` permitted, `anthropic-version` and `anthropic-dangerous-direct-browser-access` refused. `Origin` is echoed for any origin, so a Pages deploy is as reachable as localhost.
+
+The prose call carries both Anthropic headers and therefore cannot skip the preflight; the speech call carries exactly two and passes. **`server.mjs` is untouched by this and `tools/build-web.mjs` needed no new file** — that is the whole reason the two paths differ. Add one `anthropic-*` header to `buildTts()` and the speech goes behind the proxy the prose needs, and it does not.
+
+### The guard is still the feature, and it now also stops a bill
+
+`paint()` reaches the prose branch about three times a second, so a plain speak talks over itself and a plain `fetch` re-spends. Two sets, both keyed on the **line's text** rather than on `cacheKey`, because `again_()` reuses one key for a different line:
+
+- `AIStoryUI.spoken` — the line was read, once, for the session. A language switch re-speaks: the cache key is language-scoped, so the same person arrives with a different sentence in the other tongue and that one is read.
+- `voice.js failed` — the line's synthesis **terminally** failed. A network error, a rate limit, an unusable `voice_id` (which comes back as HTTP 200 with `base_resp.status_code=2013`, so `res.ok` is not the check) and a refused autoplay are all still true 350ms later. Without this set, a dead key re-spends a request on every repaint, forever. `forgetTts()` — ♪, the picker, and a change to provider, URL or key all call it.
+
+An **interruption** is not a failure and is deliberately not recorded: `hush()`, 试听 and moving to another figure all leave the line offerable. A synthesis is also a round trip that can outlast all three, so an `epoch` counter retires a clip that lands after the reader has gone; that is why `hush()` has to bump it too. `tests/voice.mjs` drives the real panel through the first of these: ten repaints of a failing line cost **one** request, and the OS voice reads it in between.
+
+The clip cache is keyed on text + voice + model and lives in memory only, so a reload costs the reader another 0.01 元 for a portrait they already heard. 24 clips / 4 MB with LRU eviction — an unbounded cache of object URLs is a leak that only shows up after the tab has been open for an hour.
+
+### The voice comes from the trade
+
+`pickVoice(lang, role, kind)` maps the `role` values the life plans already carry onto the vendor's system voices — a porter is read by the porter's voice because the data says he is one, and the reader never opens the data to notice. Hongqiao, the one subject that is always the same, gets the old voice that reads a whole scroll. `#voice-pick` lists them behind 随人物 / Follow the person, stored under `qm-tts-voice` and never overwriting `qm-voice`, so a reader who tries both keeps both choices.
+
+One English id and ten Chinese ones, which is a deliberate asymmetry: `Chinese (Mandarin)_Reliable_Executive` was confirmed live on this account, while `English_Graceful_Lady` comes from the vendor's documentation table and the same source warns that speech-2.8 may use a shorter English naming set. One unverified id is one failure that falls back to the OS voice; ten would be ten ways for the English interface to go quiet. `GET /v1/get_voice?voice_type=system` returns **404** on `.cn`, so the list cannot be enumerated from here — confirming an id costs one short request.
+
+### The OS backend's own facts
 
 Four facts about the Web Speech API, all measured in Chromium on macOS on 2026-10-06 and all of them things a plausible implementation gets wrong. `tests/fixtures/voices-macos.json` is the raw 180-voice list they came from, captured rather than written by hand — a hand-written list of pleasant voices would have passed every test while sharing nothing with the machine the code runs on.
 
@@ -202,9 +231,163 @@ Four facts about the Web Speech API, all measured in Chromium on macOS on 2026-1
 
 A 29-character line takes **6.4 seconds** in 婷婷, which is the reason the prompt's "under twenty words" is also what keeps this out of Chrome's ~15s utterance cutoff. `say -v` and `speechSynthesis.getVoices()` do **not** agree — the CLI lists `Sinji`, no browser here reports it — so the fixture has to come from the browser.
 
-**The guard is the feature.** `paint()` reaches the prose branch about three times a second, because `offer()` repaints from cache on every 350 ms tick, so a plain `speak()` there talks over itself. It keys on the line's *text* against a `Set`, not on `cacheKey` — `again_()` reuses one key for a different line, so a key-based guard would swallow 换一句 — and it is not cleared in `clear()`, so a close and a cache hit stay silent. **A language switch does not stay silent**: the cache key is language-scoped, so the same person arrives with a different sentence in the other tongue and that one is read. Marking is also conditional on `sayLine()` having actually spoken — a card that rendered while the sound was off, or before the OS delivered its voices, must not be retired for the session. Turning the sound off and on again (`forget()`) is the only way to hear a line twice, and turning it *off* cancels the line already playing, which at 6.4 s is the difference between a switch and a lie.
+**Marking is conditional on `sayLine()` having committed to speak, and on the synthesised path that is not the same as having spoken.** A card that rendered while the sound was off, or before the OS delivered its voices, must not be retired for the session. On the network path `sayLine()` returns true the moment the request is sent, so `reading` covers the second or so it takes to land — and `done` still comes from the clip, so an interrupted synthesis is equally never marked. Turning the sound off and on again (`forget()`) is the only way to hear a line twice, and turning it *off* cancels the line already playing, which at 6.4 s is the difference between a switch and a lie.
 
 Two more things the real list settles. macOS localises the language inside a voice's name — 16 of the 41 English ones are `Eddy (英语（美国）)` — so `voiceLabel()` drops the parenthetical; the English picker is otherwise the exact Han leak `tests/english.mjs` exists to prevent, arriving from the OS instead of the JSON. And the list is **not** latched: `collect()` adopts a changed list and re-fires, `onVoices` keeps a late subscriber subscribed, and a bounded retry runs in case the single event is missed, because each of those is a way the control would otherwise be retired for the life of the page. `tests/voice.mjs` pins the ranking, the labels and the say/don't-say contract against the captured list; the once-per-line rule and the repaint rate are only verifiable in a browser, which is where they were checked.
+
+## The city behind the voice
+
+`src/ambience.js` is a bed of water, wind, oars, cart wheels and hawker cries, and unlike everything else in this file it needs **no key, no network and no money** — it is noise synthesised in the browser at the moment the reader switches it on. The risk it carries is not being loud. It is **masking**, and that risk is why the bed sits low with another 6 dB of duck whenever a line is being read.
+
+### Why it is synthesised and not generated
+
+The vendor also has a music endpoint, and on paper it is the obvious way to get ambience. Measured against `~/.claude/skills/minimax-music-gen`, it loses on four independent counts:
+
+| | |
+|---|---|
+| **30–90 seconds** per generation, synchronous, no job or polling path | a bed that arrives a minute after a click is not a bed |
+| **no duration parameter at all** | the length is whatever the model decided |
+| **no loop or ambience mode** — `is_instrumental` only removes vocals | and nothing seamless to loop |
+| paid tier **priced nowhere** in the vendor's own material; the host is `api.minimaxi.com`, not the `.cn` one `src/tts.js` uses | |
+
+Any one of those is enough. The first one is enough on its own.
+
+### The loop seam is the only hard part
+
+The water runs for as long as the tab is open, so the wrap from the last sample back to the first happens thousands of times, and a step there is a tick every single time. The seam **only exists at all because the noise gets lowpassed** — white noise has none. Measured as the wrap step against the **median** interior one-sample step, over twelve seeds at 48 kHz:
+
+| | median | worst |
+|---|---|---|
+| white noise | 0.16× | — |
+| one filtering pass | 4.46× | 6.64× |
+| **filter twice, keep the second half** | **0.97×** | **2.21×** |
+| 50 ms cosine crossfade of the ends | — | reaches 5.4× |
+
+Crossfading is the textbook answer and it is the wrong one: a blend leaves the broadband step sitting at the fold. Filtering the signal twice and discarding the first half is the same cost and lands inside the noise.
+
+The test asserts all three of those rows. **A single sample proves nothing here** — the one-pass seam moves by more than 4× between seeds, so a test pinning one number would have certified whichever side it happened to land on. Twelve seeds, both bounds, and an assertion that the naive version is *worse*, so the bounds cannot pass by everything being small.
+
+### Ducking needs a signal, not a graph connection
+
+`voiceBusy()` in `src/voice.js` is a getter over a `busyId` token, polled by the bed on the frame loop that already exists. Routing the `<audio>` into the Web Audio graph via `createMediaElementSource` would have been the obvious way to duck, and it is unnecessary: ducking the **bed** only requires knowing that something is sounding, which `voice.js` already knows on every path.
+
+An event channel was the wrong shape and had five ways to latch on — 试听 passes no `done`, a clip's `ended` can never fire, a synthesis that fails over to the OS voice starts a second time. The token has the same discipline `active` and `epoch` already have: `cancel()` delivers the old utterance's error *asynchronously*, long after the next one started, so without an identity check a late event clears a flag that now belongs to a different line. A 20-second watchdog is what makes getting stuck `true` impossible. One listener per event, too — `tests/voice.mjs` models an utterance as holding a single handler each way, and a second registration replaces rather than joins.
+
+### The hawkers are the only part of this that costs anything
+
+Eight fixed cries — 糖, 热豆腐, 磨剪子嘞 — and not generated dialogue: a 卖糖人 calls 糖 and nothing else, and that is what makes it a street cry rather than a sentence. Two to five characters each, which at **3.5 元/万字符 with 1 汉字 = 2 字符** is about **0.002 元** a cry.
+
+Three gates stand between the reader and that money, and the first one is the important one: **`ttsReady()` — no key means no cries and no request.** The next two are races, not economics. `synthesize()` allows one request at a time and aborts the previous, so a cry started during a portrait's line would take that line's audio down with it; `ttsBusy()` (exported for exactly this) and `voiceBusy()` are both checked before spending. An abort is **not** recorded as a failure, because an abort is the dialogue winning a race it should have won — only a terminal failure lands in `cryFailed`, or a bad key would re-spend every 40 seconds forever.
+
+Synthesis is lazy — the first time a cry is *about to* be heard, not all eight up front — and each is then reused from `tts.js`'s clip cache. Measured over simulated time: **2 requests in the first 90 seconds, then 8 for fifteen minutes of market.** `tests/ambience.mjs` drives both bounds, and it has to `await` inside the frame loop to do it: stepping simulated time synchronously leaves no chance for the fetch to resolve, so `ttsBusy()` latches and every bound would pass without testing anything.
+
+A cry plays on the ambience graph, never through `voice.js`: it is part of the bed, so it must not duck the water and must not reach `AIStoryUI.spoken`. Its gain is set against the chain it actually plays through — the street bus at 0.5, then master at `BED` — not against 1. It was **re-derived** when the buses arrived rather than carried over: the old `CRY=4` was calibrated against a flat 0.06, and left alone it would have quietly made the hawkers quieter on the street, which is the one thing they are for.
+
+A cry also has to be *somewhere*. `hawkers()` returns early below a street weight of 0.25, so a 卖糖人 does not call across a courtyard or over open water.
+
+**English is absent on purpose.** `English_Graceful_Lady` is still unverified, so an English set would be a guess, and a bed is the last place to discover a guess was wrong.
+
+### Who is rowing is read out of the art, not guessed
+
+`three-water.js:27` finds each hull's oar tip by scanning **its own mesh** for `qmRegion===301` vertices, and `syncBoats()` fills `river.boats[i].oarContacts` only for boats that have one. So an empty `oarContacts` means the hull has no oar rigged at all — the 13.2 m barges and the fishing rowboats are told apart by the geometry, not by a velocity heuristic. The trigger is the tip crossing `three-water.js:37`'s own submerged test, so the sound lands where the spray already is.
+
+`life.onBoatStep` would have been the obvious place to hear it and is **already taken** by `three-water.js:26` — do not take it back.
+
+### The gain floors, and the default view is why
+
+`riverGain()` is 1 at the bank, falls over 40 m, and then **stops at 0.3**. Away from the water means quieter, never gone: view 1's eye sits **57 m** off the centreline, so a falloff that reached zero would open the app on a city with no river in it. `tests/ambience.mjs` reads that eye out of `app.js` rather than copying it, so if the opening shot moves the assertion follows and says so.
+
+### Three buses, and BED is derived rather than tuned
+
+The first version had one `master` gain carrying water, wind, oars and cries together, so the city had exactly one dimmer: near the river everything rose, inland everything fell. The second splits it — `waterBus`, `windBus`, `streetBus` — all feeding `master`, which still owns the volume, the duck and the slow breathing.
+
+```
+BED = 0.1 / (1 + WIND + STREET)     with WIND 0.30, STREET 0.50
+```
+
+**BED is not a number anyone tunes.** Adding two buses is otherwise a free +3 dB that nobody notices until a line of dialogue stops being audible over them. Retune a weight and the peak follows it; `tests/ambience.mjs` asserts `BED*BUS === 0.1` for exactly this.
+
+What this buys is **not loudness, and the distinction matters**. Measured against the level each place had *before* the split — not against the loudest place, which is the mistake that made an early draft of this section claim −10 dB for the opening panorama when it was +0.4 dB:
+
+| | before | after | |
+|---|---|---|---|
+| view 1 全景 | 0.0180 | 0.0188 | +0.4 dB |
+| view 2 虹桥 | 0.0600 | 0.0600 | 0 dB |
+| view 5 主街 | 0.0289 | 0.0319 | +0.8 dB |
+
+`citizens` and `riverGain` are **uncorrelated** across the ten views (Pearson r = 0.007 — the bridge is both on the water *and* the market), so summing three beds cannot manufacture dynamic range the signals do not contain. What actually changes is the **mix**, read live off the real gain nodes:
+
+| | water | wind | street | |
+|---|---|---|---|---|
+| view 1 全景 | 0.300 | 0.300 | **0.017** | water 17.6× street |
+| view 2 虹桥 | 1.000 | 0.195 | 0.437 | |
+| view 5 主街 | 0.481 | 0.179 | **0.500** | the ratio inverts |
+
+The real gain on a street is the **events**, not the bed: cart wheels, hoofbeats and cries are things that were not there at all before.
+
+### How busy a place is, and why not by distance
+
+`streetGain` counts `ecology.json`'s own `citizens[].anchor` within 30 m: **19** at view 6, which looks down on the south courtyards, **107** on the main street. Those are the measured extremes, not round numbers — the real spread is 15 dB and the curve maps it to 15 dB. Widening the span would amplify the data into more gain range than it has, which is a hand-tuned curve wearing a measurement's clothes.
+
+The anchors **do not move**, deliberately: a place has a character, and the bed should not flicker every time one individual walks past. The things that *do* move — oars, wheels, cries — are separate one-shots on top.
+
+**Distance to the nearest street is a dead signal and should stay dead.** All ten named views are within 11 m of an `ecology.json` land route; view 1 is 57 m from the river and 8 m from `south-alley`. The streets are everywhere, so their distance cannot tell a market from a courtyard.
+
+### Cutoffs do not make one bed sound like another
+
+The obvious way to make wind sound different from a market is a lower cutoff. It does not work, and this is measured: `brownFilter` is a single-pole lowpass and **peak-normalises to 0.9**, so RMS at 260 Hz, 420 Hz and 600 Hz is **0.2004 / 0.1993 / 0.1998** — one number, and the cutoff buys nothing after normalisation. The existing water bed sounds like water because of its *second* 1500 Hz layer, not its 420 Hz body.
+
+What separates them is **modulation**: a slow 8–15 s swell for wind, a dense 2–6 Hz flutter for the market. Those are audibly different things; a cutoff between 260 and 420 is not. A consequence worth knowing before tuning anything: **every bed is the same loudness in its buffer**, because the filter normalised them. The bus is the only level control.
+
+The flutter multiplies the murmur's own node and **not** the street bus — the bus also carries the cries and the cart one-shots, and pumping those at 4 Hz would wobble a spoken word.
+
+### `.value=` and `setTargetAtTime` on one node is a silent bug
+
+Each bed has **two** nodes: the bus carries the scene trim and is only ever written with `setTargetAtTime`; the bed's mix level sits on a node below it and keeps the plain `.value=` the original code used. Writing `.value` inserts a `setValueAtTime` at `currentTime`, which **cancels a pending ramp on that same node** — so a per-frame `.value=` on the bus would kill every scene transition, and the mix would snap instead of gliding while looking otherwise correct.
+
+For the same reason every one-shot routes through a bus rather than to `destination`: a source wired straight to the speakers escapes both the duck and the volume slider, and it still passes a reachability check. `tests/ambience.mjs` asserts **four hops** — source → mix → bus → master → destination — rather than mere reachability.
+
+### Carts: the same shape as oars, on a field that stops by itself
+
+`v.distance` is cumulative metres and advances in exactly one place, `simulation.js:275`, inside the branch where the convoy actually moves. Loading, waiting to be let past and blocked all roll the pose back first, so **a stopped cart is silent for free** — no separate "is it moving" test to keep in sync. It is also the field the renderer writes into the wheel rotation (`simulation.js:340`), so the sound is in phase with the animation by construction. Level scales with `speedNow`, because distance keeps advancing through the deceleration ramp.
+
+Wheel and hoof strides are **0.7 m and 1.2 m, deliberately incommensurate** — the same length would fire on the same frame forever and the cart would sound like a metronome. The test asserts they coincide on under a quarter of samples.
+
+Two distances, both measured in the browser rather than guessed: a splash carries **90 m**, a wheel strike **55 m**. A shared 90 m put cart wheels 80 m away at audible volume and produced **17 strikes a second** on the main street with all seven convoys in earshot; at 55 m it is 10.8, dominated by the two nearest.
+
+`caravan-main` **must stay `closed`** — on an open route `ArcPath.at()` would clamp at the end while `distance` kept growing, and a stopped cart would clack forever. That is a data property, not a code guard, so the test pins it.
+
+`convoyBoxes()` / `trafficBlockers` are the wrong thing to reach for: they are in **model** space while `camera.eye` is **world** space, and they allocate two object literals per call in a 60 Hz callback.
+
+### Where the label comes from, and the latch that was not one
+
+`#ambience-scene` shows the nearest districted building's district, resolved through the `district()` helper in `i18n.js` — which had been exported, bilingual and ready, since it was written and **never called**. The node carries **no `data-i18n`**: `applyStatic()` would overwrite the district name with the chrome label on every language toggle, and only a hook could put it back.
+
+It is written from `animate()`, not from `setView()` — `engine` does not exist at module top level, and `setView()` returns while the camera is still flying, so it would name the destination from the old vantage point. A `textContent` per frame is 60 layout invalidations a second, so it is written only on change.
+
+It has **no distance hysteresis**, and there was one, and removing it was the fix. It existed to stop the readout flickering — view 3's nearest building is 1.3 m away — but the classifier only runs when the eye has moved more than half a metre, so a reader standing still was never going to see a flicker. The hysteresis bought nothing and cost a real latch, observed in the browser: districts interleave in plan, so the incumbent's own distance often sat just far enough away to block a legitimate switch, and one comparison pinned the label for the session.
+
+The classifier is gated on the eye moving, or 100 ms — not on a timer, and not on CPU. It costs about 6 µs (2.0 for the 559 citizen anchors, 5.0 for the 552 building matrices), which is not an argument at all. The arguments are that a per-frame scan allocates in a callback the optimisation harnesses A/B for GC jitter, and that the answer does not change sixty times a second.
+
+`now` is `animate()`'s timestamp, **not** `actx.currentTime`, which freezes in a hidden tab and would hold the classification stale until the reader came back.
+
+### Missing data is not an empty street
+
+`crowdNear()` returns **−1 when it has no data**, and `classify()` turns that into *full* street weight. Silence would be a claim about the city that this module cannot support, and it is the same default the hawker gate depends on — which is why the cry-spending assertions in `tests/ambience.mjs` survive the gate unchanged, against a fake engine that has no `life` at all.
+
+Nothing in `updateAmbience()` may throw: `app.js` calls it inside the `try` that also re-arms `requestAnimationFrame`, so one unguarded property read is a frozen city and a permanent error banner.
+
+### The context is built in a click and never stopped behind a switch
+
+`AudioContext` starts suspended without a user gesture, so `startAmbience()` is only ever called from a **user gesture**, and `resume()` must settle **before** the first `start()` — a source scheduled against a suspended context's `currentTime` is scheduled at a point the clock has not reached.
+
+Which gesture matters, and getting it wrong was a real bug rather than a theoretical one: the switch was the *only* thing that started it, so reloading with `qm-ambience` already stored as on produced **a ticked box over a silent city**, with no way out except finding that switch and cycling it. Nobody thinks to try that. The first `pointerdown` or `keydown` **anywhere** in the page now arms it, so the stored preference is honoured and the box means what it says — and it is still a user gesture inside a handler, so the autoplay rule holds. While it is waiting, `#ambience-scene` reads `t('ambPending')`, because an empty row next to a ticked box is the same lie by another name.
+
+A `visibilitychange` handler resumes the context, because Chrome suspends in a background tab and the alternative is a checked box over a silent city. Hiding the page must **not** stop the looping sources: the context's clock freezes and resumes, whereas stop/start would jump a 10-second loop's phase.
+
+`stopAmbience()` must clear the cart-edge record map alongside the oar one. After a restart every convoy's stride counter is a large number against no record, and without it every cart in the city clacks exactly once on the first frame back — the trap `strokeEdges`' `was===false` guard exists to close.
+
+The controls sit at the top of the tools panel and **not** in `.toggles`: that grid is two columns of six layer switches with no storage and no volume, and a seventh child leaves an orphan cell. The slider stays live rather than appearing when the switch is on, which is also why it needs none of the `[hidden]` overrides `.panel label{display:flex}` forces on `#voice-row`.
 
 ## A followed subject's forward vector
 

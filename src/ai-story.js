@@ -531,7 +531,12 @@ export class AIStoryUI{
    // sayLine reports whether it started. It does not, the sound is off or the OS has not
    // delivered its voices, and it will not call done - so the marker has to come back off here or
    // the line is "reading" for the rest of the session and can never be offered again.
-   const started=sayLine(state.line,finished=>{this.reading=null;if(finished)this.spoken.add(state.line);});
+   // The last argument is what decides whether this is spoken by the operating system or synthesised
+   // by the vendor, and it hands over the two things voice.js cannot read for itself: the key lives
+   // in this module's storage, and the trade that picks the voice is in `plan`. Both are read per
+   // paint rather than cached, because a reader can change provider, key or language at any moment.
+   const started=sayLine(state.line,finished=>{this.reading=null;if(finished)this.spoken.add(state.line);},
+    {key:readKey(),provider:readProvider(),plan:this.current?.plan,kind:this.current?.hit?.kind});
    if(!started)this.reading=null;}
   // A cache hit cost nothing this time - the byline says so, rather than implying a fresh write.
   say(this.note,state.cached?t('aiCached'):t('aiByline'));
