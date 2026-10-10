@@ -229,20 +229,25 @@ doorOpen:['开','Open'],doorClosed:['合','Closed'],
 // —— 生成 · 人物白描 ——
 // Chrome only. The generated prose itself never passes through t()/T()/E() - see ai-story.js.
 aiOverline:['其 人','THE PERSON'],aiThinking:['正在看他……','Watching him……'],
-aiAgain:['换一句','Another line'],aiNoKey:['尚未设置 API 密钥','No API key yet'],
+aiAgain:['换一句','Another line'],
 aiFailed:['写不出来','Could not write'],aiRetry:['再试一次','Try again'],
 aiMake:['为其写照','Write their portrait'],aiCancel:['取消','Cancel'],
 aiWait:['还在看…… {0} 秒','Still watching… {0}s'],
 aiCached:['早前写成，本次未再花费','Written earlier — no new charge'],
-aiKeyBad:['密钥被拒，请检查。','Key rejected — check it.'],
-aiNoReach:['连不上服务商，可能是网络或跨域限制。','Could not reach the service — network, or a cross-origin limit.'],
+// Cross-origin is no longer a reader's problem: the request is same-origin to this site's own /api,
+// so the failure it names is the network or the deployment, not a browser policy.
+aiNoReach:['连不上本站服务，可能是网络问题。','Could not reach this site\'s service — network problem.'],
+// 503 is the one status a reader can act on, and what they can act on is nothing: there is no key
+// on their side to check. It names the state honestly and leaves the fix with whoever runs the site.
+aiNoService:['本站尚未开通此项服务。','This site has not enabled this service.'],
+// 429 says the answer exists and this reader has simply had a few too many. The retry button below
+// is the whole remedy, so the message says wait rather than pretending something is wrong.
+aiBusy:['来得太勤，请稍候再试。','Too many requests — wait a moment and try again.'],
 aiByline:['由模型依数据写成','Written from the scene data'],
-lblApiKey:['API 密钥','API key'],
-lblApiUrl:['接口地址','Endpoint URL'],
-aiUrlNote:['地址留空用官方接口；填自建代理地址即可选用 MiniMax。','Leave empty for the official endpoint; set your own proxy to enable MiniMax.'],
-lblProvider:['模型服务','Model service'],
-aiKeyNote:['密钥只存在本机浏览器，直连所选服务商，不经任何服务器。','The key stays in this browser and goes straight to the service you pick. No server of ours sees it.'],
-aiCost:['每次约 ¥0.02','About ¥0.02 each'],
+// The cost note is now the only thing standing between a reader and a bill they cannot see. It says
+// plainly who pays, because "about ¥0.02" on its own reads as the reader's own money and invites a
+// click reflex this feature does not want.
+aiCost:['每次约 ¥0.02，由本站承担','About ¥0.02 each, paid by this site'],
 };
 
 /** English-authored enums. Keyed by the raw runtime value; English is the raw value itself. */

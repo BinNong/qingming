@@ -127,9 +127,6 @@ html[lang=zh] .map-legend{font-size:11px}
 #ai-cancel{flex:0 0 auto;padding:6px 2px;background:none;border:none;color:var(--faint);font-size:10px;cursor:pointer}
 #ai-cancel:hover{color:var(--red)}
 #ai-cancel[hidden]{display:none}
-#qm-key,#qm-url{width:148px;min-width:0;padding:5px 8px;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
- border:1px solid #b1a89580;background:#ffffff5c;color:var(--ink)}
-#qm-key:focus,#qm-url:focus{outline:none;border-color:var(--gold)}
 html[lang=zh] #ai-desc,html[lang=zh] #ai-line{font-family:"Songti SC","Noto Serif CJK SC","STSong",serif;font-size:14px;line-height:2.05}
 html[lang=zh] #ai-desc{text-align:justify;text-justify:inter-ideograph}
 /* The cursor readout. z-index 26 because #tools is 25 and this is repositioned under the cursor,

@@ -11,8 +11,12 @@ const json=async p=>JSON.parse(await read(p));
 // answer, so the defect was invisible to every assertion below.
 registerHooks({resolve(specifier,ctx,next){if(specifier==='qingming/micro')return{url:new URL('src/micro.js',root).href,shortCircuit:true};if(specifier==='three/core')return{url:new URL('vendor/three.core.js',root).href,shortCircuit:true};if(specifier==='three')return{url:new URL('vendor/three.module.js',root).href,shortCircuit:true};return next(specifier,ctx);}});
 const {CollisionWorld,multiply,Z_TO_Y,CityEcology}=await import('../src/simulation.js');
-const {factsFor,placeFacts,buildMessages,buildRequest,parseResponse,cacheKey,hasHan,leaksMeshId,
- STORY_SCHEMA,STORY_TOOL,SYSTEM,getProvider,providerList}=await import('../src/ai-story.js');
+const {factsFor,placeFacts,parseResponse,cacheKey,hasHan,leaksMeshId}=await import('../src/ai-story.js');
+// The prompt contract lives on the server now - with the key, which is why. These tests still pin it
+// here rather than in a backend suite: what they are really asserting is that the FACTS the browser
+// resolves come out in a form the server can turn into a question, and that is a statement about the
+// boundary between the two halves.
+const {buildMessages,STORY_SCHEMA,STORY_TOOL,SYSTEM}=await import('../functions/_shared/prompt.mjs');
 const eco=await json('public/runtime/ecology.json'),nav=await json('public/runtime/navigation.json');
 const manifest=await json('public/runtime/city.json');
 const han=/\p{Script=Han}/u;
@@ -278,14 +282,18 @@ assert.equal(hourBucket(9.5),'上午');assert.equal(hourBucket(12),'正午');ass
 assert.equal(hourBucket(16),'向晚');assert.equal(hourBucket(18.5),'薄暮');
 assert.equal(hourBucket(15.5),'向晚','the bucket boundary itself must resolve to the later one');
 for(const p of eco.citizens.slice(0,40))assert.equal(factsFor(personHit(p),ctx).hour,'向晚','the default 15.7 is already past the afternoon boundary');
-assert.notEqual(cacheKey(eco.citizens[0],'zh',null,getProvider('anthropic'),'','上午'),
- cacheKey(eco.citizens[0],'zh',null,getProvider('anthropic'),'','薄暮'),
+assert.notEqual(cacheKey(eco.citizens[0],'zh',null,'上午'),
+ cacheKey(eco.citizens[0],'zh',null,'薄暮'),
  'a portrait written at 上午 must not be served at 薄暮');
-assert.notEqual(cacheKey(eco.citizens[0],'zh',null,getProvider('anthropic'),'','上午'),
- cacheKey(eco.citizens[0],'zh',null,getProvider('anthropic'),'','午后'),'and the buckets are not collapsed into one');
-// The version prefix is what retires prose written from the old seven-field facts. Without it a
-// returning reader keeps being served the trade-not-a-person text and the change looks inert.
-assert(cacheKey(eco.citizens[0],'zh').startsWith('v2|'),'the key must carry the fact-schema version');
+assert.notEqual(cacheKey(eco.citizens[0],'zh',null,'上午'),
+ cacheKey(eco.citizens[0],'zh',null,'午后'),'and the buckets are not collapsed into one');
+// v3 retires everything v2 wrote, and the reason is stronger than the one that produced v2. A v2
+// entry was written by whichever model the READER chose, and this deployment is served by one model
+// the reader never chose - handing those back would attribute prose to a writer it did not come
+// from. It also retires the provider and endpoint slots, which no longer exist.
+assert(cacheKey(eco.citizens[0],'zh').startsWith('v3|'),'the key must carry the fact-schema version');
+assert(!cacheKey(eco.citizens[0],'zh').includes('anthropic')&&!cacheKey(eco.citizens[0],'zh').includes('minimax'),
+ 'the model is the backend\'s choice now and has no business in the reader\'s cache key');
 
 // 4. The cache key is plan.name + lang, and it must separate languages - a Chinese description shown
 // under an English card is the failure mode the language toggle exists to prevent.
@@ -302,20 +310,18 @@ assert.equal(byName.size,584,'plan.name is unique, so the key is a real identity
 assert.equal(langs.size,6,'each citizen in each language gets a distinct key');
 
 // 4. Live state must not be frozen into the cache. A porter cycles 取货 -> 搬货 -> 返回货埠 -> 停留;
-// keying on name alone would serve a description of an instant that has already passed. The
-// provider is in the key too: two models write the same person differently.
+// keying on name alone would serve a description of an instant that has already passed.
 const porter=eco.citizens.find(c=>c.mode==='porter');
 assert(porter,'the ecology has porters to test against');
 const kA=cacheKey(porter,'zh','取货'),kB=cacheKey(porter,'zh','搬货');
 assert.notEqual(kA,kB,'a porter changing activity must not read from the old cache entry');
-assert.notEqual(cacheKey(porter,'zh','搬货',getProvider('anthropic')),cacheKey(porter,'zh','搬货',getProvider('minimax')),
- 'prose from one model must not be served under another model name');
-assert.equal(cacheKey(porter,'zh','搬货'),cacheKey(porter,'zh','搬货',getProvider('anthropic')),
- 'an absent provider must default to anthropic rather than producing a distinct key');
-// A custom endpoint can front a different model entirely, so it keys its own cache - serving one
-// backend's prose under another's name misrepresents where the words came from.
-assert.notEqual(cacheKey(porter,'zh','搬货',getProvider('anthropic'),'https://proxy.example/x'),
- cacheKey(porter,'zh','搬货',getProvider('anthropic'),''),'a custom endpoint must not read the vendor cache');
+assert.equal(cacheKey(porter,'zh','搬货',''),cacheKey(porter,'zh','搬货'),
+ 'an absent hour must not invent a distinct bucket - the two are the same question');
+// What replaced the provider in the key. There is one backend now, so the reader cannot pick a
+// model and there is nothing to separate - but the deployment CAN change its model, and a v3 entry
+// written by the old one would then be served under the new one's name. That risk moved to the
+// server, where the cache lives, and it is asserted in tests/package.mjs instead.
+assert.equal(cacheKey(porter,'zh','搬货','上午').split('|').length,5,'five identity slots and no more');
 
 // 5. The system prompt is the cacheable prefix, so it has to be byte-identical across every request.
 // Any interpolation - a timestamp, a name, a language - silently invalidates the whole prefix.
@@ -330,7 +336,10 @@ assert.notEqual(SYSTEM.zh,SYSTEM.en,'the two languages cannot share a prefix');
 // assumption is falsifiable in the browser instead of merely claimed. Padding a prompt to reach a
 // cache threshold would cost more than it saves.
 assert(SYSTEM.zh.length>300,`the zh prefix is only ${SYSTEM.zh.length} chars - too thin to be worth caching`);
-assert(/cache_control/.test(source),'the system prefix must carry cache_control');
+// cache_control moved with the key: the prefix is assembled server-side now, so the mark travels
+// with it. The source that has to carry it is no longer the file the browser loads.
+assert(/cache_control/.test(await read('functions/_shared/vendor.mjs')),
+ 'the system prefix must carry cache_control, wherever it is assembled');
 
 // 6. Output language is a prompt instruction; the facts stay Chinese either way. `english()` is an
 // unanchored substring table, so translating facts client-side mangles them: verified to turn
@@ -358,90 +367,41 @@ assert.equal(leaksMeshId('Person_porter_0__0599'),true);
 assert.equal(leaksMeshId('南岸西货埠的挑夫'),false);
 assert.equal(leaksMeshId('He hauls cargo at Southwest Quay.'),false);
 
-// 8. The provider envelope. This is the part that differs per vendor, and it was written from the
-//    documented compatibility tables rather than from what happened to work: MiniMax supports
-//    output_config.effort but lists neither output_config.format nor cache_control, and a live call
-//    confirmed it - the schema was dropped and the model invented a name and a twelve-year history.
-const ants=getProvider('anthropic'),mini=getProvider('minimax');
-assert.equal(ants.structured,'output_config','Anthropic supports structured outputs');
-assert.equal(mini.structured,'tool','MiniMax does not document output_config.format, so tools force the shape');
-assert.equal(ants.cache,true,'Anthropic documents prompt caching');
-assert.equal(mini.cache,false,'MiniMax does not document cache_control; sending it would be noise');
-assert.equal(getProvider('nonsense').id,'anthropic','an unknown provider id must fall back, not throw');
-// A provider whose CORS allowlist refuses anthropic-version cannot be reached from a browser at all,
-// so it must not be offered. Offering it produced a raw preflight error in the card and left the
-// reader with no way back but clearing localStorage by hand.
-assert.deepEqual(providerList().map(p=>p.id),['anthropic'],'only browser-reachable providers are offered');
-assert.equal(getProvider('minimax').browser,false,'MiniMax is kept for reference but flagged unreachable');
-// The picker must not advertise anything the reader cannot use. Every option it does offer has to
-// be a browser-reachable provider, so the two lists are checked against each other.
-const pickerHtml=await read('index.html');
-const picker=pickerHtml.slice(pickerHtml.indexOf('id="qm-provider"'));
-const offered=[...picker.slice(0,picker.indexOf('</select>')).matchAll(/value="([^"]+)"/g)].map(m=>m[1]);
-for(const id of offered)assert.equal(getProvider(id).browser,true,`the picker offers ${id}, which cannot be reached from a browser`);
-assert(offered.length>0,'the picker must offer at least one provider');
-assert(!offered.includes('minimax'),'MiniMax must not be offered — its CORS allowlist refuses the Anthropic headers');
-// A stale saved choice must not strand the reader on a provider that cannot be called.
-globalThis.localStorage={getItem:()=>'minimax',setItem(){},removeItem(){}};
-const {readProvider}=await import('../src/ai-story.js');
-assert.equal(readProvider().id,'anthropic','a saved unreachable provider falls back to a working one');
-delete globalThis.localStorage;
-// Anthropic gets a json_schema; MiniMax gets a forced tool call. Neither may carry the other's
-// mechanism, because a provider that ignores an unknown field fails silently rather than loudly.
-for(const [p,mech] of [[ants,'format'],[mini,'tools']]){
- const req=buildRequest(p,buildMessages(factsFor(personHit(porter,'搬货'),ctx),'zh'),'test-key');
- const sent=JSON.parse(req.body);
- assert.equal(req.url,p.endpoint);
- assert.equal(sent.model,p.model);
- assert.equal(sent.output_config.effort,'low','effort is documented by both providers');
- assert(sent.output_config.effort!==undefined,'effort must be explicit - MiniMax defaults to max, which is slow and dear');
- if(mech==='format'){
-  assert(sent.output_config.format,'Anthropic must receive the json_schema');
-  assert(!sent.tools,'Anthropic must not also receive the tool fallback');
- }else{
-  assert(!sent.output_config.format,'MiniMax must not be sent a field it documents as unsupported');
-  assert.equal(sent.tool_choice.name,STORY_TOOL.name,'the tool must be forced, not merely offered');
-  assert.equal(sent.tools[0].input_schema.additionalProperties,false,'the tool schema must be closed too');
- }
- assert.equal(sent.system[0].cache_control===undefined,!p.cache,'cache_control is sent only where supported');
- assert(sent.messages[0].content,'the facts always reach the model');
-}
-// Auth differs per vendor and getting it wrong is a 401, not a graceful failure.
-const authA=buildRequest(ants,{...buildMessages({},'zh')},'k'),authM=buildRequest(mini,{...buildMessages({},'zh')},'k');
-assert.equal(authA.headers['x-api-key'],'k','Anthropic authenticates with x-api-key');
-assert.equal(authM.headers.authorization,'Bearer k','MiniMax documents Authorization: Bearer');
-assert.equal(authA.headers.authorization,undefined,'Anthropic must not also send a bearer token');
-assert.equal(authA.headers['anthropic-dangerous-direct-browser-access'],'true',
- 'every browser-originated call needs the CORS opt-in header or it is a 401');
-// A custom endpoint means a proxy sits in between and answers its own preflight, so the
-// browser:false verdict - which was about the vendor's own CORS allowlist - no longer applies
-// and every provider may be offered.
-assert.deepEqual(providerList('https://proxy.example/v1/messages').map(p=>p.id).sort(),
- ['anthropic','minimax'],'a custom URL makes every provider reachable');
-assert.deepEqual(providerList('').map(p=>p.id),['anthropic'],'an empty URL changes nothing');
-// The override wins when set and is absent when not; auth and payload are untouched by it.
-const ovr=buildRequest(ants,buildMessages({},'zh'),'k','https://proxy.example/v1/messages');
-assert.equal(ovr.url,'https://proxy.example/v1/messages','a custom URL must replace the vendor endpoint');
-assert.equal(ovr.headers['x-api-key'],'k','auth is unchanged by a URL override');
-assert.equal(buildRequest(mini,buildMessages({},'zh'),'k','').url,mini.endpoint,'an empty override falls back to the vendor endpoint');
-// Only http(s) is ever stored - a typo must degrade to the vendor default, not to a fetch that
-// can never work. And a saved browser:false provider is honored only behind a custom URL.
-{
- const stored={};globalThis.localStorage={getItem:k=>stored[k]??null,setItem:(k,v)=>stored[k]=v,removeItem:k=>delete stored[k]};
- const {readUrl,writeUrl,readProvider:readP}=await import('../src/ai-story.js');
- writeUrl('  https://127.0.0.1:8787/anthropic/v1/messages ');
- assert.equal(readUrl(),'https://127.0.0.1:8787/anthropic/v1/messages','a valid URL is trimmed and kept');
- writeUrl('api.minimax.cn');assert.equal(readUrl(),'','a scheme-less URL is rejected, not saved');
- writeUrl('javascript:alert(1)');assert.equal(readUrl(),'','a non-http scheme is rejected');
- stored['qm-provider']='minimax';
- assert.equal(readP().id,'anthropic','a saved browser:false provider still falls back without a custom URL');
- writeUrl('https://proxy.example/v1/messages');
- assert.equal(readP().id,'minimax','behind a custom URL the saved provider is honored');
- assert.equal(providerList().length,2,'readUrl() defaults let the picker see the custom URL');
- writeUrl('');assert.equal(readUrl(),'','clearing the URL clears the override');
- delete globalThis.localStorage;
-}
-// The message body must be identical across providers, so a cached prompt survives a switch.
+// 8. What replaced the provider envelope. The vendor table, the auth headers, the structured-output
+//    mechanism and the endpoint all moved to functions/_shared/vendor.mjs with the key, and the
+//    tests for them moved to tests/package.mjs - where the code they describe now lives, and where
+//    they can run without a network. What remains HERE is the half that is still the browser's:
+//    that the facts it resolves are shaped so the server can build a question out of them.
+//
+//    The live reason this matters: the backend is now the trust boundary. It accepts a fact bag and
+//    nothing else, so a fact set carrying a prompt, a URL or an oversized value would be spending
+//    the operator's key on whatever it liked. assertValidFacts pins that the shape the browser
+//    produces is the shape the guard accepts.
+const {validFacts,validLang,validVoice,validText,VOICE_IDS}=await import('../functions/_shared/guard.mjs');
+const porterFacts=factsFor(personHit(porter,'搬货'),ctx);
+assert(validFacts(porterFacts),'the facts the page builds must pass the server guard');
+assert(!validFacts({role:{}}),'a nested object is not a fact - it is a payload trying to be a scene');
+assert(!validFacts('x'),'a bare string is not a fact set');
+assert(!validFacts({}),'an empty fact set describes nothing and must be refused');
+assert(!validFacts(Array.from({length:25},(_,i)=>({['k'+i]:'v'})).reduce((a,x)=>({...a,...x}),{})),'25 keys is not a figure');
+assert(!validFacts({role:'x'.repeat(81)}),'an 80-char value is a scene label; longer is not');
+assert(!validFacts({[ 'k'.repeat(25) ]:'v'}),'a 24-char key is a label; longer is not');
+assert(validFacts({hour:'上午',deck:'拱顶',crowd:'行人、挑夫'}),'the real fact shapes pass');
+assert(validLang('zh')&&validLang('en'),'the two languages the prompt has a SYSTEM string for');
+assert(!validLang('fr')&&!validLang('')&&!validLang(undefined),'anything else would silently fall back to Chinese');
+// The voice id is whitelisted rather than length-checked, because it reaches the vendor's billing
+// path. A server that accepted any string here would be a text-to-audio service, not a portrait.
+assert(validVoice('clever_boy')&&validVoice('male-qn-qingse'),'the vendor ids the page can send are accepted');
+assert(!validVoice('evil'),'an id outside the table is refused');
+assert(validVoice(''),'an empty voice id is the "let the trade decide" case, not a bad one');
+assert.equal(VOICE_IDS.size,12,'the whitelist is the client VOICES table, and both sides must agree');
+const {VOICES}=await import('../src/tts.js');
+assert.deepEqual([...VOICE_IDS].sort(),VOICES.map(v=>v.id).sort(),
+ 'client and server voice tables have drifted - a reader would pick a voice the server rejects');
+assert(validText('一句台词')&&!validText('')&&!validText('x'.repeat(201)),
+ 'a line is capped at 200 chars so this cannot become bulk text-to-audio');
+// The message body is provider-independent by construction now - there is one server-side builder -
+// but the cacheable prefix still has to be a constant, and the facts still have to reach it intact.
 const bodyA=buildMessages(factsFor(personHit(porter,'搬货'),ctx),'zh'),bodyM=buildMessages(factsFor(personHit(porter,'搬货'),ctx),'zh');
 assert.equal(bodyA.system,bodyM.system,'the cached prefix is provider-independent');
 assert.equal(bodyA.user,bodyM.user);
@@ -516,9 +476,28 @@ assert(ai>bodyClose,
 assert(!/<label[^>]*data-i18n[^>]*>[^<]{0,60}<input/i.test(html),
  'a data-i18n on a label that also holds an input deletes the input on first paint');
 // The API key is a credential: it must never be a data-i18n target or land in a captured report.
-assert(/id="qm-key"/.test(html),'the key input exists');
-assert(/id="qm-url"/.test(html),'the endpoint URL input exists');
-assert(!/data-i18n="[^"]*"[^>]*>[^<]{0,20}<input[^>]*qm-key/.test(html),'the key input is not inside a data-i18n element');
+// The three model-config controls are gone, and their absence is the feature: a reader configures
+// nothing, so there is no credential on their machine to leak and no endpoint for them to point at
+// the open proxy the backend would otherwise become. Asserted as absences on purpose - a test that
+// only checked the inputs' presence would pass just as happily if they came back.
+for(const gone of ['qm-key','qm-url','qm-provider'])assert(!html.includes(`id="${gone}"`),
+ `${gone} must not come back: the key lives on the server and the reader configures nothing`);
+assert(!/api\.(anthropic|minimax)/.test(html),'no vendor endpoint may be named in the page');
+// And nothing in src/ may reintroduce a browser-side key or vendor URL. This is the assertion that
+// would catch the migration being quietly undone in a later commit.
+for(const file of ['ai-story.js','tts.js','voice.js','app.js']){
+ const src=await read('src/'+file);
+ // Strip comments first. The CORS probe that justified the original proxy is worth keeping as a
+ // record - it is the reason this endpoint exists at all - and it names the vendor host while
+ // doing so. What must not come back is a live reference in CODE.
+ const code=src.replace(/\/\*[\s\S]*?\*\//g,'').replace(/^\s*\/\/.*$/gm,'');
+ assert(!/qm-key|qm-url|qm-provider/.test(code),
+  `src/${file} names a credential store; that belongs to functions/_shared/`);
+ assert(!/https?:\/\/api\.(minimax|anthropic)/.test(code),
+  `src/${file} holds a vendor endpoint; the browser must only ever reach this origin`);
+ assert(!/x-api-key|anthropic-dangerous-direct-browser-access|Bearer\s*\+/.test(code),
+  `src/${file} builds a vendor auth header; that is server-side now`);
+}
 
 // 12. Every method the class calls on itself must exist. The "another line" button shipped wired to
 //     this.render(), which was never defined - a click threw TypeError and nothing rendered. The
@@ -548,8 +527,17 @@ for(const sel of new Set([...source.matchAll(/querySelector\('(#[a-z-]+)'\)/g)].
 const {keyList}=await import('../src/i18n.js').then(m=>({keyList:m._diagnose().keyList}));
 for(const key of [...html.matchAll(/data-i18n="([^"]+)"/g)].map(m=>m[1]))
  assert(keyList.includes(key),`index.html references an i18n key that does not exist: ${key}`);
-const aiKeys=['aiOverline','aiThinking','aiAgain','aiNoKey','aiFailed','aiRetry','aiByline','lblApiKey','aiKeyNote','aiCost','lblApiUrl','aiUrlNote','aiMake','aiCancel','aiWait','aiCached'];
+// The reader-configurable strings are gone with the controls. Listed as absences because a test that
+// only checked the survivors would not notice the dead ones being reinstated alongside them.
+const aiKeys=['aiOverline','aiThinking','aiAgain','aiFailed','aiRetry','aiByline','aiCost','aiMake',
+ 'aiCancel','aiWait','aiCached','aiNoReach','aiNoService','aiBusy'];
 for(const k of aiKeys)assert(keyList.includes(k),`missing i18n key: ${k}`);
+for(const gone of ['aiNoKey','aiKeyBad','lblApiKey','lblApiUrl','aiUrlNote','lblProvider','aiKeyNote'])
+ assert(!keyList.includes(gone),`${gone} described a key the reader no longer has`);
+// The cost note now has to say who pays. A bare "about ¥0.02" reads as the reader's own money and
+// invites a click reflex this feature does not want, so the byline is part of the contract.
+assert(/本站承担|paid by this site/.test(await read('src/i18n.js')),
+ 'the cost note must name the payer - the reader has no key, so a bare price implies theirs');
 
 // 13. This feature adds no browser check, and must not: verification.js is a GPU contract suite
 // and a DOM panel has nothing to assert there. The count is deliberately NOT pinned here - deriving
@@ -578,7 +566,7 @@ console.log(JSON.stringify({status:'passed',citizens:eco.citizens.length,factsCh
  cursorReadings:{distinct:readings.size,largestSharedGroup:readWorst,withoutPosture:readNoPose.size},
  placeFacts:{building:namedAt,place:eco.citizens.filter(p=>factsFor(personHit(p),ctx).place).length,hour:584},
  worstBuilding:{edgeMetres:+worstEdge.toFixed(1),riseMetres:+worstRise.toFixed(1),onBridgeDenied:onBridge.length},
- guards:['han','meshId'],parseNeverThrows:true,cacheKey:'v2+plan.name+lang+state+provider+url+hour',
- prefixStable:true,providers:providerList().map(p=>p.id+':'+p.structured),mechanisms:['output_config','tool'],
+ guards:['han','meshId'],parseNeverThrows:true,cacheKey:'v3+plan.name+lang+state+hour',
+ prefixStable:true,promptOnServer:true,vendorEnvelopeTestedIn:'tests/package.mjs',mechanisms:['output_config','tool'],
  checksInBrowser:'not asserted - derived 39 vs documented 42, needs a browser',
  network:'no live call from this file. Probed 2026-10-04: output_config.format silently dropped on MiniMax (16 invented keys). Probed 2026-10-05: the forced-tool path is confirmed working - HTTP 200, stop_reason tool_use, one tool_use block, schema exact, 2-6.4s, and cache_read_input_tokens 128 on every call, so MiniMax caches the prefix server-side even though it documents no cache_control. That also found two real fabrication defects (unit conversion, invented vessels under the bridge), both since fixed. The Anthropic branch still has no live call - see the risk note in the session writeup.'},null,2));

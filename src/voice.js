@@ -31,10 +31,19 @@ const TTS_STORE='qm-tts-voice';
 let lastTts='';
 export const readTtsVoice=()=>{try{return localStorage.getItem(TTS_STORE)||lastTts;}catch(_){return lastTts;}};
 export const writeTtsVoice=v=>{lastTts=String(v||'');try{lastTts?localStorage.setItem(TTS_STORE,lastTts):localStorage.removeItem(TTS_STORE);}catch(_){}};
-/** Whether the network backend can be used at all. The provider is passed in rather than read
- *  here: ai-story.js already imports this module, so reaching back for its key would make the two
- *  import each other. */
-export const ttsReady=(opts={})=>opts.provider?.id==='minimax'&&!!opts.key;
+/** Whether the network backend can be used at all. This used to be "the reader has a MiniMax key",
+ *  which is why it took an options bag: ai-story.js imports this module, so the key had to be
+ *  handed in rather than read back. Both of those reasons are gone with the credential - the answer
+ *  now comes from the backend, which is the only party that knows.
+ *
+ *  Null until /api/config answers, and that is NOT optimistically true. The distinction matters:
+ *  before the probe lands the synthesised voices do not exist yet, and a line routed to the network
+ *  in that window would be billed for a voice the page has not even been told it can pick. A reader
+ *  whose card renders before the config response gets the operating system instead - which is the
+ *  behaviour every pre-probe reader already had, and the one the once-per-line guard is built on. */
+let ready=null;
+export const setTtsReady=v=>{ready=!!v;};
+export const ttsReady=()=>!!ready;
 
 /** zh and en, because those are the two languages the prose is ever written in. Anything else has
  *  to answer null rather than fall back: a sentence generated for the Chinese card is Chinese, and
@@ -198,9 +207,11 @@ export const forgetTts=()=>failed.clear();
 function sayNetwork(text,done,opts){
  const mine=++epoch,lang=getLang();
  // `voiceId` here is whatever the picker is showing, which is a vendor id on the network path and
- // an OS voice's name on the other; an empty value means "let the trade decide".
+ // an OS voice's name on the other; an empty value means "let the trade decide". The vendor id
+ // travels to the backend, which whitelists it - it is the one field here that reaches a billing
+ // path, and a reader choosing among twelve is not the same as a reader choosing any string.
  const voiceId=opts.voiceId||readTtsVoice()||pickVoice(lang,opts.plan?.role,opts.kind);
- synthesize(text,{key:opts.key,voiceId,lang}).then(audio=>{
+ synthesize(text,{voiceId,lang}).then(audio=>{
   if(mine!==epoch)return;
   playClip(audio.url,ok=>{if(ok){if(done)done(true);}else giveUp(text,done);});
  },()=>{if(mine!==epoch)return;giveUp(text,done);});

@@ -14,53 +14,46 @@ import {sayLine} from './voice.js';
  *  - The prose lives in a sibling of #inspect-body, not inside it. show() rebuilds that node
  *    wholesale every 350ms, which would destroy async text three times a second. */
 
-const KEY_STORE='qm-key';
-const PROVIDER_STORE='qm-provider';
-const URL_STORE='qm-url';
-// Anthropic 5.5's thinking cannot be turned off and it bills against max_tokens, so this has to
-// cover reasoning plus the ~200 visible tokens. A 200-token budget truncates the reply mid-JSON.
-const MAX_TOKENS=2048;
+// The model, its key, its prompt and its vendor all live in functions/_shared/ on the server. The
+// reader configures nothing: there is no key to type, no endpoint to point at, and no provider to
+// choose. What crosses the wire is this module's whole contribution - a fact set resolved against
+// the live scene - and the backend decides how to turn that into a question.
+//
+// The three rules below are what make that safe, and none of them is optional:
+//  - The page sends FACTS, never a prompt. A client that could compose its own question would be
+//    spending the operator's key on arbitrary text, so the prompt moved to the server with the key.
+//  - The reply is still parsed and vetted HERE, not trusted because it came from our own backend.
+//    A schema is a request, not a guarantee - the live call that ignored json_schema and invented a
+//    porter's name and twelve-year history is why - and now the check has a second reason: it also
+//    catches a compromised or misconfigured upstream.
+//  - Spending is still an explicit click. offer() runs on a 350ms tick and on every language toggle,
+//    so anything that fires a request from it would spend money on readers who only wanted the facts.
+
 // An Opus call with thinking runs 20-60s and browser fetch has no timeout of its own, so without
-// this a dropped connection leaves the panel spinning forever.
+// this a dropped connection leaves the panel spinning forever. Kept at the original figure: the
+// request now has a Function cold start in front of it as well as the model.
 const TIMEOUT_MS=45000;
 
-/** Provider capabilities, from each vendor's own compatibility table rather than from what happens
- *  to work. They differ on exactly the two features this feature depends on:
+/** The same origin that served the page, and the only thing it talks to. Absolute vendor URLs are
+ *  gone from this file entirely: a reader-supplied endpoint was how a browser-held key became an
+ *  open relay, and there is nothing left for one to be. */
+const API='/api';
+
+/** What this deployment can do. Asked once, at load, because the synthesised voice picker only
+ *  means anything when the backend holds a TTS key - a list of vendor voice ids over an instance
+ *  with no key is a control that cannot work.
  *
- *  - Anthropic supports `output_config.format` (structured outputs) and prompt caching.
- *  - MiniMax's documented table supports `output_config.effort` but lists neither
- *    `output_config.format` nor `cache_control`. A live call confirmed it: the schema was silently
- *    dropped and the model answered with 16 invented keys, including a name and a twelve-year
- *    history for a porter who has neither in the data.
- *  - MiniMax fully supports `tools` and `tool_choice`, so that is the fallback that actually forces
- *    a shape - a prompt instruction alone is what produced the invention above.
- *
- *  `structured` therefore picks the mechanism, not whether the output is checked. The response is
- *  validated locally either way; a provider that ignores the constraint gets rejected, not trusted. */
-const PROVIDERS={
- anthropic:{id:'anthropic',label:'Anthropic',endpoint:'https://api.anthropic.com/v1/messages',model:'claude-opus-5-5',
-  auth:'x-api-key',structured:'output_config',cache:true,browser:true},
- // Kept, but not offered: MiniMax's CORS allowlist (probed 2026-10-04) permits Authorization and
- // Content-Type yet refuses both `anthropic-version` and `anthropic-dangerous-direct-browser-access`,
- // so the preflight fails and the browser never sends the request. There is no workaround - a
- // request carrying a key as application/json is never a "simple request", so the preflight cannot
- // be skipped. It is reachable only through a same-origin proxy. Registering it as an option the
- // reader can pick would only produce a raw CORS message in the panel.
- minimax:{id:'minimax',label:'MiniMax',endpoint:'https://api.minimax.cn/anthropic/v1/messages',model:'MiniMax-M3',
-  auth:'bearer',structured:'tool',cache:false,browser:false},
-};
-// The CORS verdict behind `browser:false` applies to the vendor's own endpoint only. A visitor who
-// sets a custom URL has a proxy in between, and a proxy answers its own preflight - so every
-// provider becomes reachable and the picker may offer all of them.
-export const providerList=(url=readUrl())=>Object.values(PROVIDERS).filter(p=>p.browser||url);
-export const getProvider=id=>PROVIDERS[id]||PROVIDERS.anthropic;
-export const readProvider=(url=readUrl())=>{try{
-  const p=PROVIDERS[localStorage.getItem(PROVIDER_STORE)];
-  // A provider saved before it was withdrawn must not keep being selected, or the reader is stuck
-  // on a CORS failure with no way back except clearing storage by hand.
-  return p&&(p.browser||url)?p:PROVIDERS.anthropic;
- }catch(_){return PROVIDERS.anthropic;}};
-export const writeProvider=id=>{const p=getProvider(id);try{localStorage.setItem(PROVIDER_STORE,p.id);}catch(_){}};
+ *  Optimistic on failure: if /api/config itself is unreachable we assume the features are on and
+ *  let the request discover otherwise. That is deliberate. The alternative is a page that hides its
+ *  best features because a config probe timed out, and every feature here already has a working
+ *  fallback - the system voice, the cached portrait, the plain facts. */
+let config={prose:true,tts:true};
+export const serverConfig=()=>config;
+export async function loadConfig(){
+ try{const r=await fetch(API+'/config',{headers:{accept:'application/json'}});
+  if(r.ok){const j=await r.json();if(j&&typeof j.tts==='boolean')config={prose:!!j.prose,tts:!!j.tts};}}catch(_){}
+ return config;}
+
 
 const ROLE={merchant:'商人',laborer:'劳力',porter:'挑夫',boatman:'舟子',vendor:'摊贩',woman:'妇人',scholar:'学子',guard:'巡城',farmer:'农夫',child:'孩童'};
 const MODE={crew:'舟员',traveller:'行旅',resident:'居家',seated:'闲坐',shopkeeper:'看店',porter:'脚夫'};
@@ -150,43 +143,6 @@ const HAN=/\p{Script=Han}/u;
 const MESH_ID=/[A-Za-z]__\d+$|^(Person|Main_street|Courtyard|South_approach|North_approach)_\S*__?\d+$/;
 const INSTANCE_SUFFIX=/__\d{3,}/;
 
-/** A closed schema, so the model answers with the two fields the panel renders and cannot invent
- *  keys nothing reads. Sentence length is prompt-only: json_schema takes no min/maxLength.
- *  `line` covers a spoken line AND a sound, because the reader can point at a bridge and a bridge
- *  has nobody to speak. One schema for all three subjects rather than one per kind. */
-export const STORY_SCHEMA={type:'object',properties:{
- description:{type:'string',description:'两到三句白描，第三人称，现在时。'},
- line:{type:'string',description:'此刻的一句或一声，加引号，不加解释。'}},
- required:['description','line'],additionalProperties:false};
-
-/** The cacheable prefix. These two strings must stay byte-identical across every request or the
- *  prompt cache misses on every click - any interpolation here, including a language toggle, is a
- *  silent billing regression. They sit well over the 512-token minimum so caching actually engages. */
-export const SYSTEM={
-zh:`你为一座可交互的《清明上河图》三维城市场景撰写白描。读者站在北宋汴京的街上，点了一个市中人、一条船或一座桥，想知道它此刻是什么样子。
-
-写作要求：
-- 第三人称、现在时，像《清明上河图》本身的笔法：白描，不加评论，不作解释，不写"他似乎""仿佛"这类揣度。
-- 只写"这件事会做的事"。绝不编造姓名、家世、亲属、店铺名、具体钱数、日期或地名——你没有这些信息，编出来就是假的。
-- 可以写：它/他在做什么、身子或船身怎么使、手上有什么、周围是什么声音与气味、这个时辰的光。
-- 不可以写：名字（数据里没有）、来历、想法、任何画面上看不出的事。
-- 身段与动作要与给定的"身段"一致；行旅与脚夫要写出正在赶往何处的那股劲头。
-- 只写事实里出现过的东西。事实没提到的船、人、店铺、声音，就算此刻真的可能有，也不要写。
-- 第二句看主体：人会说话、舟子会吆喝，就写他此刻会说的那一句；若是桥这样无人的地方，就写此刻那里的一声响。都要短，不文绉绉，不超过二十字。
-
-格式：description 两到三句；line 是此刻的一句或一声，用「」包住。全部中文。`,
-en:`You write character portraits for an interactive 3D reconstruction of the Qingming Riverside scroll. The reader is standing in a Northern Song street in Bianjing, has clicked one figure, and wants to know what this person looks like right now.
-
-Writing rules:
-- Third person, present tense, in the plain brushwork of the scroll itself: describe, never editorialise, no "seems to" or "as if".
-- Write only what this thing would be doing. Never invent a name, a family, a shop's name, a price, a date or a place - you have none of that, and inventing it makes it false.
-- You may write: what it is doing, how the body or hull works, what is in the hands or the hold, the sounds and smells nearby, the light at this hour.
-- You may not write: a name, a history, what it thinks, or anything not visible in the scene.
-- Match the given posture. A traveller or porter should carry the urgency of going somewhere.
-- The second line depends on the subject: a person speaks and a boatman calls out, so write the line they would say now; a bridge has nobody to speak, so write the sound there right now. Either way: short, unliterary, under twenty words.
-
-Format: description is two to three sentences; line is the one line or the one sound, in double quotes. All English.`,
-};
 
 const cache=()=>{try{return JSON.parse(localStorage.getItem('qm-stories')||'{}');}catch(_){return {};}};
 const writeCache=c=>{try{localStorage.setItem('qm-stories',JSON.stringify(c));}catch(_){}};
@@ -280,63 +236,26 @@ export function factsFor(hit,ctx){
  return f;
 }
 
-// Chinese fact labels, so the model reads one coherent language. English keys here are a small
-// thing that measurably invites an English word or two into Chinese prose.
-const LABEL={role:'行当',mode:'身份',age:'年纪',posture:'身段',doing:'正在',route:'往来路线',dock:'货埠',
- // 近旁 not 所在: a teahouse 9m off is 所在 for nobody but the one standing in it, and only 8 of
- // 584 figures are inside a footprint at all. The label must not claim more than the data does.
- building:'近旁',place:'近处',hour:'时辰',
- vessel:'船型',cargo:'载货',quay:'货埠',mast:'桅高限',span:'桥',form:'形制',routes:'桥上的路',deck:'桥面',crowd:'桥上的人'};
-const lines=f=>Object.entries(f).map(([k,v])=>`${LABEL[k]||k}：${v}`).join('\n');
-
-/** The tool the schema-less path forces. MiniMax documents `tools` and `tool_choice` as fully
- *  supported, so this is the mechanism that actually constrains the shape there - a prompt
- *  instruction is what let the model answer with sixteen invented keys. */
-export const STORY_TOOL={name:'write_portrait',description:'写出这个人的白描与一句话。',
- input_schema:STORY_SCHEMA};
-
-export function buildMessages(facts,lang){
- return{lang,system:SYSTEM[lang==='en'?'en':'zh'],user:lines(facts),
-  schema:STORY_SCHEMA,max_tokens:MAX_TOKENS};
-}
-
-/** Assemble the wire request for a provider. Kept separate from buildMessages so the message
- *  content is identical across providers and only the envelope differs - that is what lets a
- *  cached prompt be reused when the visitor switches. */
-export function buildRequest(provider,body,key,url){
- const headers={'content-type':'application/json','anthropic-version':'2023-06-01',
-  // Required on any browser-originated call; without it the API answers 401.
-  'anthropic-dangerous-direct-browser-access':'true'};
- headers[provider.auth==='bearer'?'authorization':'x-api-key']=provider.auth==='bearer'?'Bearer '+key:key;
- const system=[{type:'text',text:body.system}];
- // Only where prompt caching is actually supported. Sending cache_control to a provider that
- // documents it as ignored is noise; sending it to one that errors on it would break the call.
- if(provider.cache)system[0].cache_control={type:'ephemeral'};
- const payload={model:provider.model,max_tokens:body.max_tokens,system,
-  messages:[{role:'user',content:body.user}],output_config:{effort:'low'}};
- if(provider.structured==='output_config')payload.output_config.format={type:'json_schema',schema:body.schema};
- else{payload.tools=[STORY_TOOL];payload.tool_choice={type:'tool',name:STORY_TOOL.name};}
- return{url:url||provider.endpoint,headers,body:JSON.stringify(payload)};
-}
 
 /** plan.name is the identity - unique across all 584 and authored in the data, unlike actor.id,
  *  which is a construction counter that any asset reordering would silently re-point. The live
  *  state rides along because a porter cycles 取货 -> 搬货 -> 返回货埠 and a frozen "he is carrying"
- *  outlives the moment it described. The URL joins the provider in the key: a custom endpoint can
- *  front a different model entirely, and serving one backend's prose under another's name
- *  misrepresents where the words came from.
+ *  outlives the moment it described.
  *
- *  `v2` is the fact schema. Prose written before the place facts existed described a trade rather
- *  than a person, and without a version marker the key would keep handing it back forever - the
- *  change would look like it had done nothing. The hour rides along for the same reason: it is a
+ *  `v3` is the backend migration. The old key ended in the provider id and the endpoint URL, both of
+ *  which are gone: there is one backend, and a reader cannot point it anywhere. The bump matters
+ *  anyway, because a v2 entry was written by whichever model the READER chose, and this deployment
+ *  is now served by one model the reader never chose - serving those back would attribute prose to
+ *  a writer it did not come from. The hour rides along for the same reason it always did: it is a
  *  slider the reader controls, and a portrait written at 上午 must not be served at 薄暮.
  *
  *  Position deliberately does NOT. It would multiply the key space on figures who are walking,
- *  so they would miss the cache on every approach and pay again. The accepted cost is that a
- *  traveller's portrait can name a street he has since left; a portrait is a snapshot, and the
- *  card already says 早前写成 when it is a cache hit. */
-export function cacheKey(plan,lang,state,provider,url=readUrl(),hour=''){
- return['v2',plan?.name,lang,state||'',provider?.id||'anthropic',url||'',hour||''].join('|');}
+ *  so they would miss the cache on every approach and pay again - and now that the operator pays,
+ *  a miss is their money rather than the reader's. The accepted cost is that a traveller's portrait
+ *  can name a street he has since left; a portrait is a snapshot, and the card already says
+ *  早前写成 when it is a cache hit. */
+export function cacheKey(plan,lang,state,hour=''){
+ return['v3',plan?.name,lang,state||'',hour||''].join('|');}
 
 export const hasHan=s=>HAN.test(String(s??''));
 export const leaksMeshId=s=>MESH_ID.test(String(s??''))||INSTANCE_SUFFIX.test(String(s??''));
@@ -370,14 +289,6 @@ export function parseResponse(json){
  }catch(_){return null;}
 }
 
-export const hasKey=()=>{try{return !!localStorage.getItem(KEY_STORE);}catch(_){return false;}};
-export const readKey=()=>{try{return localStorage.getItem(KEY_STORE)||'';}catch(_){return '';}};
-export const writeKey=k=>{try{k?localStorage.setItem(KEY_STORE,k.trim()):localStorage.removeItem(KEY_STORE);}catch(_){}};
-// An optional endpoint override, for a same-origin or local proxy (the only way to reach a
-// browser:false provider). Anything that is not http(s) is treated as unset rather than saved,
-// so a typo degrades to the vendor default instead of a fetch that can never work.
-export const readUrl=()=>{try{const u=(localStorage.getItem(URL_STORE)||'').trim();return /^https?:\/\//.test(u)?u:'';}catch(_){return '';}};
-export const writeUrl=u=>{try{const v=String(u||'').trim();/^https?:\/\//.test(v)?localStorage.setItem(URL_STORE,v):localStorage.removeItem(URL_STORE);}catch(_){}};
 
 /** Renders generated prose. Guard order matters: a mesh id is always a bug and always rejected; a
  *  stray Han character in English output is merely untidy, and re-asking would spend a second call
@@ -419,11 +330,9 @@ export class AIStoryUI{
   try{
    this.variant++;
    const store=cache();delete store[target.key];
-   const url=readUrl(),provider=readProvider(url);
-   const body=buildMessages(target.facts,target.lang);
-   const ask=this.variant>1?`\n\n（第 ${this.variant} 次：请换一个完全不同的画面或说法。）`:'';
-   const req=buildRequest(provider,{...body,user:body.user+ask},readKey(),url);
-   const res=await fetch(req.url,{method:'POST',signal:controller.signal,headers:req.headers,body:req.body});
+   // Facts and a variant counter, nothing else. The prompt, the schema and the model are the
+   // backend's business; this call is what the deployment is for.
+   const res=await post('/story',{facts:target.facts,lang:target.lang,variant:this.variant},controller.signal);
    if(!res.ok){const e=new Error('HTTP '+res.status);e.status=res.status;throw e;}
    const result=vet(parseResponse(await res.json()),target.lang);
    if(!result)throw new Error('unusable response');
@@ -446,10 +355,10 @@ export class AIStoryUI{
   // no AI block at all, rather than a card whose facts are all defaults.
   const plan=subjectOf(hit);
   if(!plan){this.clear();return;}
-  const lang=getLang()==='en'?'en':'zh',url=readUrl();
+  const lang=getLang()==='en'?'en':'zh';
   // The key takes the hour from the facts rather than from ctx, so the cache bucket and the
   // bucket the model was actually told can never drift apart.
-  const facts=factsFor(hit,ctx),key=cacheKey(plan,lang,stateOf(hit),readProvider(url),url,facts.hour);
+  const facts=factsFor(hit,ctx),key=cacheKey(plan,lang,stateOf(hit),facts.hour);
   if(this.current?.key!==key){this.clear();this.variant=0;this.current={key,lang,plan,hit,facts};}
   const store=cache(),kept=vet(store[key],lang);
   if(kept){this.paint({...kept,cached:true});return;}
@@ -465,10 +374,7 @@ export class AIStoryUI{
   // (abort() with no reason) lands on the quiet fallback instead.
   const timer=setTimeout(()=>controller.abort(new Error('timeout')),TIMEOUT_MS);
   try{
-   const url=readUrl(),provider=readProvider(url);
-   const body=buildMessages(target.facts,lang);
-   const req=buildRequest(provider,body,readKey(),url);
-   const res=await fetch(req.url,{method:'POST',signal:controller.signal,headers:req.headers,body:req.body});
+   const res=await post('/story',{facts:target.facts,lang,variant:this.variant},controller.signal);
    if(!res.ok){const e=new Error('HTTP '+res.status);e.status=res.status;throw e;}
    const payload=await res.json();
    // Whether the prefix actually cleared the cache minimum is an assumption, not a fact, until the
@@ -502,12 +408,21 @@ export class AIStoryUI{
    // report there is. A bare spinner reads as a hang long before the timeout.
    let s=0;this.tick=setInterval(()=>say(this.note,t('aiWait',++s)),1000);return;}
   if(state.ready){say(this.desc,'');say(this.line,'');
-   const keyed=hasKey();say(this.note,keyed?t('aiCost'):t('aiNoKey'));vis(this.make,keyed);return;}
-  // A network failure and a bad key look identical without a reason. Saying which one it was costs
-  // nothing and turns "it does not work" into something the reader can act on.
+   // The button is always available: there is nothing for a reader to configure and no credential
+   // that can be missing on their side. An instance whose backend has no key answers 503, which
+   // lands on the error branch below and says so.
+   say(this.note,t('aiCost'));vis(this.make,true);return;}
+  // A backend that is down, throttling, or not configured looks like one thing to a reader who no
+  // longer holds a key, so the message names what they can do - nothing - rather than what they
+  // should fix. The one actionable case is being throttled, and that one says so.
   if(state.error){const why=String(state.why||'');
    say(this.desc,'');say(this.line,'');
-   say(this.note,why==='Failed to fetch'?t('aiNoReach'):/^HTTP 40[13]/.test(why)?t('aiKeyBad'):t('aiFailed'));
+   // 503 is the one status the reader can interpret, because it is the one that means "this
+   // instance is not set up" rather than "something went wrong" - and it is the operator's to fix,
+   // not theirs. 429 says the same thing from the other side: the answer exists, this reader just
+   // has to wait, and telling them to check a key they never had would be a lie.
+   say(this.note,why==='Failed to fetch'?t('aiNoReach'):
+    /^HTTP 503/.test(why)?t('aiNoService'):/^HTTP 429/.test(why)?t('aiBusy'):t('aiFailed'));
    say(this.again,t('aiRetry'));vis(this.again,true);return;}
   // textContent throughout: the card body is built by innerHTML interpolation, and model output
   // must never share that path.
@@ -531,12 +446,13 @@ export class AIStoryUI{
    // sayLine reports whether it started. It does not, the sound is off or the OS has not
    // delivered its voices, and it will not call done - so the marker has to come back off here or
    // the line is "reading" for the rest of the session and can never be offered again.
-   // The last argument is what decides whether this is spoken by the operating system or synthesised
-   // by the vendor, and it hands over the two things voice.js cannot read for itself: the key lives
-   // in this module's storage, and the trade that picks the voice is in `plan`. Both are read per
-   // paint rather than cached, because a reader can change provider, key or language at any moment.
+   // The last argument decides whether this is spoken by the operating system or synthesised, and it
+   // hands over what voice.js cannot read for itself: the trade that picks the voice is in `plan`.
+   // There is no key and no provider in it any more - both moved to the backend, so voice.js asks
+   // serverConfig() instead. The trade is still read per paint rather than cached, because the
+   // reader can change language at any moment and that changes which voices exist.
    const started=sayLine(state.line,finished=>{this.reading=null;if(finished)this.spoken.add(state.line);},
-    {key:readKey(),provider:readProvider(),plan:this.current?.plan,kind:this.current?.hit?.kind});
+    {plan:this.current?.plan,kind:this.current?.hit?.kind});
    if(!started)this.reading=null;}
   // A cache hit cost nothing this time - the byline says so, rather than implying a fresh write.
   say(this.note,state.cached?t('aiCached'):t('aiByline'));

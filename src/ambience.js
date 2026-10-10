@@ -375,7 +375,7 @@ export function stopAmbience(){
 // unverified, so there is no honest way to ship an English set, and a bed is the last place to find out.
 export const CRIES=['糖——','热豆腐——','磨剪子嘞——','烧饼——','冰糖葫芦——','热汤圆——','白——糖——','甜瓜——'];
 
-let cries=new Map(),cryFailed=new Set(),nextCry=0,lastCryKey='';
+let cries=new Map(),cryFailed=new Set(),nextCry=0;
 // A cry has to carry over the murmur it lands in, and it arrives through the street bus - which is
 // trimmed to STREET (0.5) and then master (BED = 0.1/1.8). So its own gain is set against that chain's
 // nominal, not against 1, and it was re-derived here rather than carried over: the old CRY=4 was
@@ -487,13 +487,12 @@ export const resetScene=()=>{scene=null;scored=-1e9;label='';seen=false;};
  *  who sits for two minutes may pay for two, not eight. A terminal failure is remembered and never
  *  retried; an abort is not, because an abort is the dialogue winning a race it should have won. */
 function hawkers(t,opts,street=1){
- if(!actx||!ttsReady(opts)||getLang()==='en')return;
+ if(!actx||!ttsReady()||getLang()==='en')return;
  // A 卖糖人 does not call out across a courtyard or over open water. `street` is the bus weight, so
  // this also means a cry is quieter on a quiet street than on the main one, without anything else
  // knowing which street it is on.
  if(street<CRY_STREET)return;
  if(voiceBusy()||ttsBusy())return;
- if(opts.key!==lastCryKey){lastCryKey=opts.key;cryFailed.clear();}
  if(!nextCry){nextCry=t+10+jitter()*25;return;}
  if(t<nextCry)return;
  nextCry=t+30+jitter()*40;
@@ -502,9 +501,9 @@ function hawkers(t,opts,street=1){
  if(cries.has(text)){shout(cries.get(text));return;}
  // The context is captured here rather than read back later: a synthesis takes most of a second, and a
  // reader who switches the bed off in the middle of one must not have that decision - their own, and
- // unrelated to the key - retire the cry for the session. That is why every step below checks `c` first.
+ // unrelated to the cry - retire it for the session. That is why every step below checks `c` first.
  const c=actx;
- synthesize(text,{key:opts.key,voiceId:readTtsVoice()||pickVoice('zh','vendor'),lang:'zh'})
+ synthesize(text,{voiceId:readTtsVoice()||pickVoice('zh','vendor'),lang:'zh'})
   // decodeAudioData detaches the ArrayBuffer it is handed, and those bytes are still the clip cache's,
   // so it gets a copy rather than a view.
   .then(clip=>c.decodeAudioData(clip.data.slice().buffer))

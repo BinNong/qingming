@@ -4,8 +4,8 @@ import {V,world,mix,Walker} from './simulation.js';
 import {loadCity} from './loader.js';
 import {EcologyUI} from './ecology-ui.js';
 import {InspectUI} from './inspect.js';
-import {AIStoryUI,readKey,writeKey,readProvider,writeProvider,providerList,readUrl,writeUrl} from './ai-story.js';
-import {voiceFor,voiceList,voiceLabel,voiceListNow,voiceOn,setVoiceOn,readVoice,writeVoice,speak,hush,onVoices,audition,ttsReady,readTtsVoice,writeTtsVoice,forgetTts} from './voice.js';
+import {AIStoryUI,loadConfig} from './ai-story.js';
+import {voiceFor,voiceList,voiceLabel,voiceListNow,voiceOn,setVoiceOn,readVoice,writeVoice,speak,hush,onVoices,audition,ttsReady,setTtsReady,readTtsVoice,writeTtsVoice,forgetTts} from './voice.js';
 import {ttsVoices} from './tts.js';
 import {startAmbience,stopAmbience,updateAmbience,ambienceOn,setAmbienceOn,ambienceVol,setAmbienceVol,ambienceRunning,sceneDistrict,resetScene} from './ambience.js';
 import {ThreeCityEngine} from './three-engine.js';
@@ -55,7 +55,7 @@ $('#tools-btn').onclick=()=>$('#tools').classList.toggle('open');
 // one that makes the button useless. With a MiniMax key there is a third answer, and it is there on
 // the first frame, because it never has to ask the operating system for anything.
 let voiceBuilt='';
-const ttsMode=()=>ttsReady({provider:readProvider(),key:readKey()});
+const ttsMode=()=>ttsReady();
 const fillVoices=()=>{const sel=$('#voice-pick'),net=ttsMode(),lang=getLang();
  const list=net?[]:voiceList(voiceListNow(),lang),pick=net||voiceFor(lang,voiceListNow(),readVoice());
  const hide=!pick;for(const el of ['#voice-btn','#voice-audition','#voice-row'])$(el).hidden=hide;
@@ -87,21 +87,16 @@ $('#voice-pick').onchange=e=>{forgetTts();ttsMode()?writeTtsVoice(e.target.value
 // reader asked. It does cost a request on the synthesised path, which is why it stays a button and
 // is not something the card does to itself.
 $('#voice-audition').onclick=()=>{const picked=$('#voice-pick').value;
- if(ttsMode())audition(t('voiceAudition'),{provider:readProvider(),key:readKey(),voiceId:picked});
+ if(ttsMode())audition(t('voiceAudition'),{voiceId:picked});
  else speak(t('voiceAudition'),voiceFor(getLang(),voiceListNow(),picked));};
 onVoices(fillVoices);onLang(fillVoices);
-// The visitor's own key, kept in localStorage like the language choice. It is sent straight to
-// the selected provider from the browser and never touches this repository or any server of ours.
-$('#qm-key').value=readKey();$('#qm-key').onchange=e=>{writeKey(e.target.value);fillVoices();forgetTts();toast(t('aiKeyNote'));};
-// The picker is filled in JS rather than HTML: a custom endpoint means a proxy answers the
-// preflight, so the browser:false providers become reachable and must appear then, and only then.
-const fillProviders=()=>{const sel=$('#qm-provider');sel.textContent='';for(const p of providerList()){const o=document.createElement('option');o.value=p.id;o.textContent=p.label;sel.appendChild(o);}sel.value=readProvider().id;};
-fillProviders();$('#qm-url').value=readUrl();
-// Provider, endpoint and key all decide which of the two voice lists the picker is showing, so each
-// of them has to refill it - otherwise choosing MiniMax leaves a picker full of operating system
-// voices that the synth path will never use.
-$('#qm-url').onchange=e=>{writeUrl(e.target.value);e.target.value=readUrl();fillProviders();fillVoices();forgetTts();inspectUI?.close();toast(t('aiKeyNote'));};
-$('#qm-provider').onchange=e=>{writeProvider(e.target.value);fillVoices();forgetTts();inspectUI?.close();toast(t('aiKeyNote'));};$('#fullscreen').onclick=async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen();}catch{toast(t('toastFull'));}};
+// Which of the two voice lists the picker shows now depends on the BACKEND's configuration rather
+// than on anything the reader chose, so it is asked once and then held. The refill matters for the
+// same reason it always did: a picker showing operating system voices when the network path is live
+// offers names sayLine() will never use. forgetTts() runs either way, because a line that fell back
+// because the backend was unconfigured is a line this reader has every reason to hear again.
+loadConfig().then(cfg=>{setTtsReady(cfg.tts);fillVoices();forgetTts();});
+$('#fullscreen').onclick=async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen();}catch{toast(t('toastFull'));}};
 $('#pixel-ratio').onchange=e=>{if(!engine)return;engine.maxPixelRatio=e.target.value==='native'?Infinity:+e.target.value;engine.resize();};$('#quality').onchange=e=>{engine?.setQuality(e.target.value);toast(e.target.selectedOptions[0].textContent);};$('#sun').oninput=e=>{const h=+e.target.value;$('#hour').textContent=String(Math.floor(h)).padStart(2,'0')+':'+String(Math.round((h%1)*60)).padStart(2,'0');if(engine){engine.sunHour=h;engine.shadowDirty=true;}};$('#ink').oninput=e=>{engine&&(engine.ink=+e.target.value);$('#ink-value').textContent=Math.round(+e.target.value*100)+'%';engine?.style.set({enabled:+e.target.value});};$('#motion').onchange=e=>{engine&&(engine.animate=e.target.checked);};document.querySelectorAll('[data-layer]').forEach(el=>el.onchange=()=>{if(engine){el.checked?engine.hidden.delete(el.dataset.layer):engine.hidden.add(el.dataset.layer);engine.shadowDirty=true;}});
 // The city bed, and the only place an AudioContext is ever built here: inside a click. One made without
 // a user gesture starts suspended and stays suspended, which would be a checked box over a silent city.
@@ -174,7 +169,7 @@ function animate(now){if(engine?.exporting){if(!window.__singleFrame)requestAnim
  if(mode==='walk'&&walker){const room=walker.step(camera,keys,dt);engine.playerPosition=walker.position;$('#walk-room').textContent=room?T(room.name)+' · '+t(walker.position[2]>room.lo+2.0?'walkUp':'walkDown'):t('walkBianjing');const door=engine.navigation.nearestDoor(walker.position);$('#door-hint').textContent=door?t('doorHint',t(door.target>.5?'verbClose':'verbOpen'),T(door.mo.label)):'';}
  if(mode==='fly'&&keys.size){let f=V.norm(V.sub(camera.target,camera.eye)),r=V.norm(V.cross(f,[0,1,0])),speed=dt*(keys.has('ShiftLeft')?30:9),d=[0,0,0];if(keys.has('KeyW'))d=V.add(d,V.scale(f,speed));if(keys.has('KeyS'))d=V.add(d,V.scale(f,-speed));if(keys.has('KeyD'))d=V.add(d,V.scale(r,speed));if(keys.has('KeyA'))d=V.add(d,V.scale(r,-speed));if(keys.has('KeyE'))d[1]+=speed;if(keys.has('KeyQ'))d[1]-=speed;camera.eye=V.add(camera.eye,d);camera.target=V.add(camera.target,d);if(camera.eye[1]<.9){let dd=.9-camera.eye[1];camera.eye[1]+=.9-camera.eye[1];camera.target[1]+=dd;}}
  if(tour&&now-tourStart>9500){setView(active+1);tourStart=now;}
- try{updateAmbience(engine,camera.eye,{key:readKey(),provider:readProvider(),now});showScene();ecologyUI?.update(dt);inspectUI?.update();const stats=engine.renderIfChanged(camera,now/1000);if(stats)frames++;if(now-lastPerf>1800){$('#performance').textContent=stats?t('perfFmt',(frames*1000/(now-lastPerf)).toFixed(1),stats.totalDraws||stats.draws,((stats.totalTriangles||stats.triangles)/1000000).toFixed(1))+(stats.passTimes?' · '+Object.entries(stats.passTimes).map(([k,v])=>k+' '+v.toFixed(1)).join(' '):''):t('perfPaused');frames=0;lastPerf=now;}if(stats)window.__stats=stats;window.__camera=camera;if(!ready){ready=true;window.__ready=true;progress(1,t('loadReady'));$('#loading').style.opacity=0;setTimeout(()=>$('#loading').style.display='none',750);}if(!window.__singleFrame)requestAnimationFrame(animate);}catch(e){error(e);}}
+ try{updateAmbience(engine,camera.eye,{now});showScene();ecologyUI?.update(dt);inspectUI?.update();const stats=engine.renderIfChanged(camera,now/1000);if(stats)frames++;if(now-lastPerf>1800){$('#performance').textContent=stats?t('perfFmt',(frames*1000/(now-lastPerf)).toFixed(1),stats.totalDraws||stats.draws,((stats.totalTriangles||stats.triangles)/1000000).toFixed(1))+(stats.passTimes?' · '+Object.entries(stats.passTimes).map(([k,v])=>k+' '+v.toFixed(1)).join(' '):''):t('perfPaused');frames=0;lastPerf=now;}if(stats)window.__stats=stats;window.__camera=camera;if(!ready){ready=true;window.__ready=true;progress(1,t('loadReady'));$('#loading').style.opacity=0;setTimeout(()=>$('#loading').style.display='none',750);}if(!window.__singleFrame)requestAnimationFrame(animate);}catch(e){error(e);}}
 (async()=>{try{let data=await loadCity(progress);let opts=new URLSearchParams(location.search);engine=new ThreeCityEngine(canvas,data);await engine.loadDetails(progress);if(opts.get('quality'))engine.setQuality(opts.get('quality'));engine.lighting(engine.camera);progress(.94,t('loadPrograms'));await engine.renderer.compileAsync(engine.scene,engine.camera);
 // Exercise shadow and outline materials too; they are created lazily by their passes.
 engine.animate=false;

@@ -26,7 +26,7 @@ const {noiseBuffer,brownFilter,splashBuffer,clackBuffer,hoofBuffer,murmurBuffer,
  cartStrikes,streetGain,windShape,crowdNear,startAmbience,stopAmbience,CRIES,updateAmbience,
  ambienceOn,setAmbienceOn,ambienceVol,setAmbienceVol,ambienceRunning,classify,sceneDistrict,resetScene,
  BUS,BED,WIND,STREET,CROWD_LO,CROWD_HI,WHEEL,HOOF,CART_RANGE,SPLASH_RANGE}=await import('../src/ambience.js');
-const {voiceBusy,speak,hush}=await import('../src/voice.js');
+const {voiceBusy,speak,hush,setTtsReady}=await import('../src/voice.js');
 const {lifeRiver}=await import('../src/simulation.js');
 const eco=JSON.parse(await readFile(new URL('public/runtime/ecology.json',root),'utf8'));
 const nav=JSON.parse(await readFile(new URL('public/runtime/navigation.json',root),'utf8'));
@@ -350,8 +350,10 @@ assert.equal(ambienceRunning(),false,'and turning it off tears the context down 
 assert.equal(listeners.visibilitychange,undefined,'unlistening too, or a stopped bed is woken by the next tab switch');
 
 // --- Hawker cries: the only part of the bed that costs money. Two contracts matter here and neither
-// is audible - a reader without a key must spend nothing at all, and a reader with one must not be
-// charged for all eight cries the moment they switch it on.
+// is audible. An instance with no speech backend must spend nothing at all, and an instance with one
+// must not be charged for all eight cries the moment someone switches it on. The second half used to
+// be about the READER's key and is now the operator's - which raises rather than lowers the stakes on
+// the lazy-synthesis bound below, because that is the only thing stopping a market from being a loop.
 assert.ok(CRIES.length>=6,'a market with one cry in it is a beep');
 for(const c of CRIES){
  assert.ok(c.length<=6,`a cry is short or it is a sentence: ${c}`);
@@ -369,22 +371,27 @@ const run=async(seconds,opts)=>{const c=ctxs[ctxs.length-1];
   if(i%4===3)await tick();}
  await tick();await tick();};
 
+// What gates a cry moved. It was "does this reader hold a MiniMax key", read from an options bag
+// the caller filled in from localStorage; it is now "did /api/config report a speech backend", which
+// is a module flag and cannot be set per call. Both states are real deployments, and the boundary
+// between them has to be exact: no backend means silence, not a request that 503s every time.
+setTtsReady(false);
 await run(600,{});
-assert.equal(requests,0,'no key means no cries and - the point of the assertion - no request either');
-await run(600,{key:'k',provider:{id:'anthropic'}});
-assert.equal(requests,0,'and a provider the TTS endpoint is not behind spends nothing either');
+assert.equal(requests,0,'an instance with no speech backend spends nothing - and issues no request at all');
 
-await run(90,{key:'k',provider:{id:'minimax'}});
-assert.ok(requests>0,'a MiniMax key does buy hawkers');
+setTtsReady(true);
+await run(90,{});
+assert.ok(requests>0,'a configured backend does buy hawkers');
 assert.ok(requests<=2,
  `cries are synthesised the first time one is about to be heard, not all up front: ${requests} requests in the first 90 seconds of a market holding ${CRIES.length}`);
-await run(900,{key:'k',provider:{id:'minimax'}});
+await run(900,{});
 assert.ok(requests<=CRIES.length,
  `and each is then reused rather than re-bought: ${requests} requests over fifteen minutes of cries for ${CRIES.length} cries`);
 
-// An abort is the dialogue winning a race it should have won, not a broken key: retrying it is free
+// An abort is the dialogue winning a race it should have won, not a dead backend: retrying it is free
 // and re-spending it is not. The distinction is the whole reason this set exists rather than a retry.
 await run(600,{});
+setTtsReady(false);
 stopAmbience();
 
 // --- The wiring. These read the source the way tests/voice.mjs does, because a control that is
@@ -413,8 +420,10 @@ assert.match(i18n,/ambPending:\['[^']+','[^']+'\]/,
 assert.ok(app.includes("t('ambPending')"),'which means resolving it from JS - applyStatic would wipe a data-i18n on this node');
 assert.match(amb,/voiceBusy\(\)\?DUCK:1/,'the bed ducks against the getter');
 assert.doesNotMatch(amb,/onVoice|addEventListener\('voice/,'and not through a second event channel that could latch on');
-assert.ok(app.includes('updateAmbience(engine,camera.eye,{key:readKey(),provider:readProvider()'),
- 'driven from the frame that already exists rather than a second rAF that could drift - a prefix match, because opts legitimately grew a timestamp for the scene classifier');
+assert.ok(app.includes('updateAmbience(engine,camera.eye,{now})'),
+ 'driven from the frame that already exists rather than a second rAF that could drift. The opts bag '
+ +'carries a timestamp for the scene classifier and nothing else now: the key and the provider moved '
+ +'to the backend with everything else, and this call site is where they would have to come back');
 assert.ok(app.includes('showScene()'),'and the place name is written from that same frame, not from setView, which returns while the camera is still flying');
 assert.match(app,/onLang\(\(\)=>\{[^}]*resetScene\(\)/,
  'a language switch has to drop the cached label, or the readout keeps the old language until the reader happens to walk somewhere new');

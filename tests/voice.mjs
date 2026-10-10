@@ -30,8 +30,15 @@ globalThis.speechSynthesis={getVoices:()=>fakeVoices,
   if(ending==='end')u.h?.end?.();else if(ending==='error')u.h?.error?.();}};
 globalThis.SpeechSynthesisUtterance=class{constructor(text){this.text=text;}addEventListener(ev,fn){(this.h||(this.h={}))[ev]=fn;}};
 
-const {voiceFor,voiceList,voiceLabel,speak,sayLine,hush,onVoices,voicesReady,voiceListNow,voiceOn,setVoiceOn,readVoice,writeVoice,audition,ttsReady,readTtsVoice,writeTtsVoice,forgetTts}=await import('../src/voice.js');
+const {voiceFor,voiceList,voiceLabel,speak,sayLine,hush,onVoices,voicesReady,voiceListNow,voiceOn,setVoiceOn,readVoice,writeVoice,audition,ttsReady,setTtsReady,readTtsVoice,writeTtsVoice,forgetTts}=await import('../src/voice.js');
 const {buildTts,parseTts,pickVoice,ttsVoices,MODEL}=await import('../src/tts.js');
+// The backend is what answers "can this instance speak", and there is no key on this machine to
+// stand in for it. Standing one up is what /api/config does at runtime; doing it here is what lets
+// every network-path assertion below run. It starts FALSE, because the first block of tests is
+// about the window a real page lives in between load and the probe answering - a window that must
+// behave as though the synthesised voices do not exist yet - and it is switched on where the
+// network path starts being exercised.
+setTtsReady(false);
 const {setLang}=await import('../src/i18n.js');
 const REAL=JSON.parse(await read('tests/fixtures/voices-macos.json'));
 const html=await read('index.html'),css=await read('src/style.css'),app=await read('src/app.js');
@@ -232,11 +239,16 @@ assert.match(guard,/if\(!this\.spoken\.has\(state\.line\)&&this\.reading!==state
  'the mark must be keyed on the text and skip a line already in flight; keyed on the cache key, 换一句 reuses one key for a different line and is swallowed');
 assert.match(guard,/sayLine\(state\.line,finished=>\{this\.reading=null;if\(finished\)this\.spoken\.add\(state\.line\);\}/,
  'and committed only once the utterance finishes - an interrupted line was never read');
-// The synthesised voice needs two things voice.js cannot read for itself - the visitor's key and the
-// trade the voice is picked from - and asking for them the other way round would make ai-story.js and
-// voice.js import each other. So the card hands both over at the call site, every paint.
-assert.match(guard,/sayLine\(state\.line,finished=>\{[^]*?\}\s*,\s*\{key:readKey\(\),provider:readProvider\(\),plan:this\.current\?\.plan,kind:this\.current\?\.hit\?\.kind\}\)/,
- 'the network path is chosen from the key and the plan, passed in rather than imported - a circular import between the card and the voice module would put one of them in its temporal dead zone');
+// The synthesised voice needs the trade it is picked from, and asking for it the other way round
+// would make ai-story.js and voice.js import each other. So the card hands it over at the call site,
+// every paint. The key and the provider used to travel this way too; they do not any more, and the
+// assertion that they must not is the point - if either reappears at this call site, the migration
+// has been half-undone and the browser is carrying a credential again.
+assert.match(guard,/sayLine\(state\.line,finished=>\{[^]*?\}\s*,\s*\{plan:this\.current\?\.plan,kind:this\.current\?\.hit\?\.kind\}\)/,
+ 'the network path is chosen from the plan, passed in rather than imported - a circular import between the card and the voice module would put one of them in its temporal dead zone');
+assert.doesNotMatch(guard,/sayLine\([^)]*readKey|readProvider/,
+ 'no credential may reach the voice path: the card would be handing a key to a module that would '
+ +'put it on the wire');
 assert.match(guard,/if\(!started\)this\.reading=null;/,
  'sayLine does not call done when it declines to speak, so the marker must come back off here - '+
  'otherwise one line rendered while muted stays "reading" for the session and is never offered again');
@@ -304,23 +316,32 @@ const reply=()=>({base_resp:{status_code:0,status_msg:'success'},data:{audio:MP3
 const goodFetch=async(url,init)=>{calls.push({url,init});if(hold)return hold;return{ok:true,status:200,json:async()=>reply()};};
 globalThis.fetch=goodFetch;
 const tick=()=>new Promise(r=>setTimeout(r,0));
-const MINIMAX={key:'a-key',provider:{id:'minimax'},plan:{role:'porter'},kind:'person'};
+const MINIMAX={plan:{role:'porter'},kind:'person'};
 
-// The request, because the whole reason this backend exists where it does is the header set. The
-// allowlist is per host, not per path, and it permits exactly these two headers - so a third one
-// named anthropic-* would put the speech behind the same proxy the prose needs and it does not.
-const req=buildTts('一句台词',{key:'a-key',voiceId:'clever_boy',lang:'zh'});
-assert.equal(req.url,'https://api.minimax.cn/v1/t2a_v2');
-assert.deepEqual(Object.keys(req.headers).sort(),['authorization','content-type'],
- 'two headers, and only two: MiniMax refuses anthropic-version and anthropic-dangerous-direct-browser-access');
-assert.equal(req.headers.authorization,'Bearer a-key');
+// The request. It used to be asserted for its header set rather than its content, because the whole
+// reason this backend reached the vendor directly was that it carried exactly two headers and
+// MiniMax's preflight allowlist permits those two while refusing both anthropic-* ones (probed
+// 2026-10-09, byte-identical across api.minimax.{cn,chat,com} for both /v1/t2a_v2 and
+// /v1/text/chatcompletion_v2). That constraint is history - the request is same-origin to our own
+// /api now, and the key is on the server - so what is asserted instead is the thing that replaced
+// it: the browser knows the text and the voice and nothing that could be replayed elsewhere.
+const req=buildTts('一句台词',{voiceId:'clever_boy',lang:'zh'});
+assert.equal(req.url,'/api/tts','same-origin: the page never addresses a vendor host');
+assert.deepEqual(Object.keys(req.headers).sort(),['content-type'],
+ 'one header, and it is not a credential');
+assert(!Object.values(req.headers).some(v=>/bearer|sk-|api[_-]?key/i.test(String(v))),
+ 'no authorization header may be built in the browser - that is the whole migration');
 const payload=JSON.parse(req.body);
-assert.equal(payload.model,MODEL);
-assert.equal(payload.output_format,'hex','hex, not the 24-hour url: a blob the reader can replay beats a link that expires');
-assert.equal(payload.stream,false);
-assert.equal(payload.audio_setting.format,'mp3');
-assert.equal(payload.voice_setting.voice_id,'clever_boy');
-assert.equal(JSON.parse(buildTts('x',{key:'k',voiceId:'v',lang:'en'}).body).language_boost,'English','an English line must not be read by a Chinese voice model');
+assert.deepEqual(Object.keys(payload).sort(),['lang','text','voiceId'],
+ 'the page sends a line and a voice and nothing else: not the model, not the audio format, not a price');
+assert.equal(payload.text,'一句台词');
+assert.equal(payload.voiceId,'clever_boy');
+assert.equal(buildTts('x',{voiceId:'clever_boy'}).body.includes('model'),false,
+ 'the model is the server\'s choice; a client that could pick it could pick a different price');
+// The vendor-side shape still has to be right, and it is the server\'s job now - asserted there in
+// tests/package.mjs. What matters here is that the two agree on the one field that crosses.
+assert.equal(JSON.parse(buildTts('x',{voiceId:'v',lang:'en'}).body).lang,'en',
+ 'the language still crosses, so the server can pick language_boost without guessing');
 
 // A 200 that is not the answer is the failure this file exists to prevent. An invalid voice_id comes
 // back as status_code 2013 inside a perfectly good HTTP response, so res.ok is not the check.
@@ -345,19 +366,36 @@ assert.equal(pickVoice('en','porter'),'English_Graceful_Lady');
 assert.deepEqual(ttsVoices('en').map(v=>v.key),['vElegant'],'a Chinese id reads English prose in a Chinese accent');
 assert.ok(ttsVoices('zh').length>=10,'and the Chinese card gets a choice of voices');
 
-// Availability is the provider and the key, and nothing else - a reader on Anthropic keeps the OS
-// voices they had, with nothing new to configure and nothing new that can fail.
-assert.equal(ttsReady({provider:{id:'minimax'},key:'k'}),true);
-assert.equal(ttsReady({provider:{id:'anthropic'},key:'k'}),false);
-assert.equal(ttsReady({provider:{id:'minimax'},key:''}),false);
-assert.equal(ttsReady(),false);
+// Availability is now the BACKEND's answer and nothing else. It used to be the provider and the
+// key; both moved to the server with the credential, so there is nothing left for a reader to
+// configure and nothing new that can fail on their side.
+//
+// The three states are all real. Unset is what a page renders in the window between load and
+// /api/config answering, and it is deliberately FALSE: before the probe lands the synthesised voice
+// list does not exist, so a line routed to the network then would be billed for a voice the page
+// has not been told it can pick. That window is where the once-per-line guard is most fragile - a
+// card rendering early must fall back to the OS voice, not silently retire the line.
+// The file starts with the backend unanswered, which is the state the first block above exercised.
+assert.equal(ttsReady(),false,'before /api/config answers, the synthesised voices do not exist yet');
+setTtsReady(true);
+assert.equal(ttsReady(),true,'a configured backend means the synthesised voices exist');
+setTtsReady(false);
+assert.equal(ttsReady(),false,'an instance with no TTS key keeps the OS voices, unchanged');
+setTtsReady(true);
+// A reader cannot influence this any more, so nothing that used to configure it may come back.
+for(const gone of [{provider:{id:'anthropic'}},{key:'k'},{provider:{id:'minimax'},key:'k'}])
+ assert.equal(ttsReady(gone),true,'the opts bag is ignored - the backend decides, not the reader');
 
 // One line, one request, and the card's repaint cannot start a second.
+// Everything below runs against a backend that has answered: this is the state after /api/config
+// reports a TTS key, and it is the only state in which a line goes to the network at all.
+setTtsReady(true);
 setVoiceOn(true);ending='end';spoken.length=0;clips.length=0;calls.length=0;
 const finished=[];
 assert.equal(sayLine('第一句',v=>finished.push(v),MINIMAX),true,'a committed line reports true synchronously, or the card would clear its in-flight mark');
 assert.equal(calls.length,1);
-assert.equal(JSON.parse(calls[0].init.body).voice_setting.voice_id,'male-qn-qingse');
+assert.equal(JSON.parse(calls[0].init.body).voiceId,'male-qn-qingse',
+ 'the trade chose the voice and the id crossed to the server, which whitelists it');
 await tick();
 assert.equal(clips.length,1,'and one clip when it lands');
 assert.equal(spoken.length,0,'the OS voice does not also read it');
@@ -388,7 +426,7 @@ assert.equal(mem.has('qm-voice'),false,'and the operating system voice is untouc
 calls.length=0;
 sayLine('第三句',null,MINIMAX);
 await tick();
-assert.equal(JSON.parse(calls[0].init.body).voice_setting.voice_id,'clever_boy','an explicit choice beats the trade');
+assert.equal(JSON.parse(calls[0].init.body).voiceId,'clever_boy','an explicit choice beats the trade');
 writeTtsVoice('');mem.clear();assert.equal(readTtsVoice(),'','clearing removes the record rather than storing an empty one');
 setVoiceOn(true);   // mem.clear() took the mute switch with it, and voiceOn() reads storage every call
 
@@ -439,12 +477,17 @@ mem.clear();
 
 // The picker has to offer the vendor's voices while that path is live, and the OS list when it is
 // not - a picker full of voices the synth path never uses is worse than no picker.
-assert.match(app,/const ttsMode=\(\)=>ttsReady\(/,'which of the two lists the picker shows is decided in one place');
+assert.match(app,/const ttsMode=\(\)=>ttsReady\(\)/,'which of the two lists the picker shows is decided in one place');
 assert.match(app,/\?writeTtsVoice\(e\.target\.value\):writeVoice\(e\.target\.value\)/,'and the same select writes to the matching key');
-for(const id of ['#qm-provider','#qm-url','#qm-key']){
- const at=app.indexOf(`$('${id}').onchange`);
- assert.ok(at>0,`${id} still has its change handler`);
- assert.ok(app.slice(at,at+220).includes('fillVoices()'),`changing ${id} can change the voice list, so it has to refill it`);}
+// The three change handlers that used to sit here are gone with the controls they belonged to, and
+// the refill they did has moved to the one event that can still change the answer: the backend
+// reporting in. Checked as an absence, because a test asserting only the survivors would pass
+// just as happily if a handler came back.
+for(const gone of ['#qm-provider','#qm-url','#qm-key'])
+ assert(!app.includes(`$('${gone}').onchange`),`${gone} must not come back: the reader configures nothing`);
+assert.match(app,/loadConfig\(\)\.then\(cfg=>\{setTtsReady\(cfg\.tts\);fillVoices\(\);/,
+ 'the backend\'s answer is what refills the picker now, and it has to refill it - a stale list is a '
+ +'control offering voices the synth path will never use');
 assert.match(app,/if\(ttsMode\(\)\)audition\(/,'the audition speaks in whichever voice the card is about to use');
 
 // --- The control and its styles.

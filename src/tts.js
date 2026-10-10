@@ -1,18 +1,22 @@
-// Synthesising the line instead of borrowing the operating system's voice. The visitor's own
-// MiniMax key goes straight from the browser to the vendor - there is no server of ours on this
-// path either, and `dist/` stays a pure static bundle.
+// Synthesising the line instead of borrowing the operating system's voice.
 //
-// The one header rule that makes that work: this request carries `authorization` and
-// `content-type` and NOTHING else. MiniMax's preflight allowlist permits exactly those two and
-// refuses both Anthropic headers, and that verdict is per host, not per path - probing
-// api.minimax.{cn,chat,com} on 2026-10-09 returned a byte-identical allowlist for /v1/t2a_v2 and
-// for /v1/text/chatcompletion_v2. So the prose call needs the local proxy and this one does not,
-// and adding an anthropic-* header here would put it straight back behind the proxy.
+// The request goes to this origin's /api/tts, and the MiniMax key lives on the server. It used to
+// be the reader's own key, sent straight to api.minimax.cn - a path that worked precisely because
+// the request carried only `authorization` and `content-type` and MiniMax's preflight allowlist
+// permits exactly those two while refusing both anthropic-* headers (probed 2026-10-09, a
+// byte-identical allowlist across api.minimax.{cn,chat,com} for /v1/t2a_v2 and
+// /v1/text/chatcompletion_v2). That constraint is now history: there is no vendor URL in this file
+// and no header to get wrong. What survives of it is the reason this module has no provider switch
+// - the endpoint was always a constant, and now it is our own.
+//
+// The clip cache, the voice table and parseTts() are unchanged, because none of them ever had
+// anything to do with the credential. Only the URL and the headers moved.
 
-const ENDPOINT='https://api.minimax.cn/v1/t2a_v2';
 // speech-2.8-hd, measured live on this account: 19 characters came back in 0.94s as 57012 bytes of
-// 128kbps mp3. The turbo model halves the price and is not worth it for a line that is spoken once.
+// 128kbps mp3. The model name is now the server's to choose; this constant stays because the clip
+// cache is keyed on it and a rename would silently orphan every cached clip in a live session.
 export const MODEL='speech-2.8-hd';
+const ENDPOINT='/api/tts';
 // A line is under twenty words and the whole synthesis measured under a second, so this only ever
 // fires on a network that has stopped delivering. Long enough not to give up on a cold connection.
 const TIMEOUT_MS=15000;
@@ -61,19 +65,20 @@ export function pickVoice(lang,role,kind){
  const slug=role?VOICE_FOR[role]:kind==='boat'?'vSincere':kind==='surface'?'vElder':'';
  return idOf(slug||DEFAULT_ZH);}
 
-/** Assemble the wire request. Kept separate from synthesize() for the same reason buildRequest() is
- *  in ai-story.js: the shape is what a test can assert without a network. */
-export function buildTts(text,{key,voiceId,lang='zh'}){
- return{url:ENDPOINT,headers:{authorization:'Bearer '+key,'content-type':'application/json'},
-  body:JSON.stringify({model:MODEL,text,stream:false,output_format:'hex',
-   language_boost:lang==='en'?'English':'Chinese',
-   voice_setting:{voice_id:voiceId,speed:1,vol:1,pitch:0},
-   audio_setting:{sample_rate:32000,bitrate:128000,format:'mp3',channel:1}})};}
+/** Assemble the wire request. Kept separate from synthesize() because the shape is what a test can
+ *  assert without a network - and it no longer carries a credential, which is the whole point: what
+ *  the browser knows about a synthesis is the text and the voice, and nothing that could be
+ *  replayed elsewhere. `model` is not sent either; the server decides that now, and sending one
+ *  would let a client ask for a different price. */
+export function buildTts(text,{voiceId,lang='zh'}={}){
+ return{url:ENDPOINT,headers:{'content-type':'application/json'},
+  body:JSON.stringify({text,voiceId:voiceId||'',lang:lang==='en'?'en':'zh'})};}
 
-/** The audio, or null. A vendor that ignored a field answers 200 with something else in the body,
- *  so the shape is checked here rather than trusted: base_resp.status_code is the only success
- *  (1004/2049 bad key, 1002 rate limited, 2013 bad parameter - a wrong voice_id is the last of
- *  those), and the audio is a hex string of even length, ~114000 characters for a five-second line. */
+/** The audio, or null. The shape is checked here rather than trusted even though the reply came from
+ *  our own backend: a transparent proxy is still a hop, and a 200 carrying something else is exactly
+ *  what a misconfigured upstream does. base_resp.status_code is the only success (1004/2049 bad
+ *  key, 1002 rate limited, 2013 bad parameter - a wrong voice_id is the last of those), and the
+ *  audio is a hex string of even length, ~114000 characters for a five-second line. */
 export function parseTts(json){
  const code=json&&json.base_resp&&json.base_resp.status_code;
  if(code!==0)return null;
@@ -98,14 +103,14 @@ let inflight=null;
 /** One synthesis at a time, and a new one cancels the old - the same "never two queued" rule the OS
  *  path keeps. Without it a reader clicking through five figures in two seconds fires five
  *  requests for audio they will all but never hear, and pays for all five. */
-export async function synthesize(text,{key,voiceId,lang}){
+export async function synthesize(text,{voiceId,lang}={}){
  const ck=clipKey(text,voiceId),hit=clips.get(ck);
  if(hit){clips.delete(ck);clips.set(ck,hit);return{...hit,cached:true};}
  if(inflight){const was=inflight;inflight=null;was.abort();}
  const ctl=new AbortController();inflight=ctl;
  const timer=setTimeout(()=>ctl.abort(new Error('timeout')),TIMEOUT_MS);
  try{
-  const req=buildTts(text,{key,voiceId,lang});
+  const req=buildTts(text,{voiceId,lang});
   const res=await fetch(req.url,{method:'POST',signal:ctl.signal,headers:req.headers,body:req.body});
   if(!res.ok)throw new Error('HTTP '+res.status);
   const bytes=parseTts(await res.json());
