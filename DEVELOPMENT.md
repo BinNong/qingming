@@ -54,3 +54,15 @@ Then configure a **Cloudflare WAF rate-limiting rule** on `/api/*` — 10 reques
 Set `QM_PROVIDER` to `anthropic` or `minimax` (default). Neither key is committed, and `.dev.vars` is gitignored — `npm start` reads `MINIMAX_KEY` / `ANTHROPIC_KEY` straight from the environment.
 
 A `functions/` directory is deployed from the repository root and is **not** part of `dist/`, so the static build is unaffected by any of this.
+
+### Running `server.mjs` off the local machine
+
+`npm start` binds `127.0.0.1`. This process holds the key and spends real money per request, so reaching the network from it has to be deliberate:
+
+```sh
+HOST=0.0.0.0 ALLOWED_ORIGINS=https://your.host MINIMAX_KEY=... npm start
+```
+
+`ALLOWED_ORIGINS` is a comma-separated allowlist and it is **not optional** on a non-loopback bind — with it unset the model endpoints answer `403` to everything rather than serving a credential to the first caller that arrives, and the startup banner says so. It is checked against the request's `Origin`, which stops a page on another site from spending the key; it is not authentication, and a `curl` can send any `Origin` it likes, so put a reverse proxy in front of this before exposing it to the internet. Exposure is derived from the **bind address**, never from the request's `Host` header — an earlier version derived it from `Host` and served a request the banner had just called refused.
+
+Static files are still served on any bind; only the model endpoints are gated.

@@ -8,12 +8,28 @@ import {handleStory,handleTts,handleConfig} from './functions/_shared/routes.mjs
 import {asNode} from './functions/_shared/adapter.mjs';
 const root=fileURLToPath(new URL('./',import.meta.url));
 const port=Number(process.env.PORT||4193);
+// HOST defaults to loopback, and that default is the point. This process holds MINIMAX_KEY and
+// spends the operator's money on request, so "reachable from the network" has to be something
+// someone typed on purpose. HOST=0.0.0.0 opts in, and asNode's Origin check then applies: with
+// ALLOWED_ORIGINS unset the model endpoints answer 403 to everything rather than serving a
+// credential to the first caller that arrives.
+const host=process.env.HOST||'127.0.0.1';
 // The same handlers Cloudflare runs, so `npm start` behaves like the deployed site and
-// tests/package.mjs can exercise the real routing offline. Keys come from the environment here
+// tests/backend.mjs can exercise the real routing offline. Keys come from the environment here
 // exactly as they do in the Worker - never from the page.
 const story=asNode(handleStory),tts=asNode(handleTts);
+// ALLOWED_ORIGINS is what makes a non-loopback bind safe: with it unset, the model endpoints answer
+// 403 to every caller, because an endpoint holding a paid credential must refuse rather than guess.
+// A development machine binding 127.0.0.1 is exempt - there the page and the server are the same
+// process and there is nobody else to refuse.
 const env={MINIMAX_KEY:process.env.MINIMAX_KEY||'',ANTHROPIC_KEY:process.env.ANTHROPIC_KEY||'',
- QM_PROVIDER:process.env.QM_PROVIDER||'minimax',ORIGIN:`http://127.0.0.1:${port}`};
+ QM_PROVIDER:process.env.QM_PROVIDER||'minimax',
+ // The one fact the Origin check needs and cannot infer: whether this process is reachable from
+ // off-machine. Derived from the bind address, never from a request's Host header - see the note on
+ // originAllowed(), where deriving it from Host shipped a bug where the banner said REFUSED and the
+ // request reached the vendor anyway.
+ EXPOSED:host==='0.0.0.0'||host==='::',
+ ALLOWED_ORIGINS:String(process.env.ALLOWED_ORIGINS||'').split(',').map(s=>s.trim()).filter(Boolean)};
 const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json','.png':'image/png','.jpg':'image/jpeg','.webm':'video/webm','.glb':'model/gltf-binary','.gz':'application/gzip','.md':'text/plain; charset=utf-8'};
 const server=http.createServer(async(req,res)=>{
  try{
@@ -67,7 +83,21 @@ const server=http.createServer(async(req,res)=>{
   if(res.headersSent){console.error('server error after headers:',e);res.destroy();return;}
   if(process.env.QM_DEBUG)console.error('server error:',e);
   res.writeHead(e.code==='ENOENT'?404:400);res.end('File not found or invalid path');}
-}).listen(port,'127.0.0.1',()=>{
- console.log(`Three.js: http://127.0.0.1:${server.address().port}/`);
-
+// HOST defaults to loopback, and that default is the point. This process holds MINIMAX_KEY and
+// spends the operator's money on request, so "reachable from the network" has to be something
+// someone typed on purpose. HOST=0.0.0.0 opts in, and asNode's Origin check then applies: with
+// ALLOWED_ORIGINS unset the model endpoints answer 403 to everything rather than serving a
+// credential to the first caller that arrives.
+}).listen(port,host,()=>{
+ const a=server.address();
+ const shown=host==='0.0.0.0'?'127.0.0.1':host;
+ console.log(`Three.js: http://${shown}:${a.port}/`);
+ if(host==='0.0.0.0'){
+  if(env.MINIMAX_KEY||env.ANTHROPIC_KEY){
+   console.log(env.ALLOWED_ORIGINS.length?
+    `Model endpoints: ALLOWED_ORIGINS = ${env.ALLOWED_ORIGINS.join(', ')}`:
+    'Model endpoints: REFUSED - set ALLOWED_ORIGINS to the origin that serves the page, e.g. '
+    +'ALLOWED_ORIGINS=https://your.host');
+  }else console.log('Model endpoints: not configured (no key in the environment).');
+ }
 }).on('error',e=>{console.error('Server failed:',e.message);process.exitCode=1;});
