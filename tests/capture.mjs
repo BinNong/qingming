@@ -8,6 +8,11 @@ const root=await mkdtemp(path.join(tmpdir(),'qingming-capture-'));
 let server;
 try {
  await cp(new URL('../server.mjs',import.meta.url),path.join(root,'server.mjs'));
+ // server.mjs imports the model backend from functions/_shared/, so the copy has to bring it too -
+ // otherwise the server cannot start at all. This is the same coupling anyone who copies
+ // server.mjs out of the repo hits, which is why the import lives at the top of the file rather
+ // than behind a route: a missing module should be a startup crash, never a 404 at request time.
+ await cp(new URL('../functions',import.meta.url),path.join(root,'functions'),{recursive:true});
  server=spawn(process.execPath,['server.mjs'],{cwd:root,env:{...process.env,PORT:'0'},stdio:['ignore','pipe','inherit']});
  const [message]=await once(server.stdout,'data');
  const base=String(message).trim().match(/http:\/\/127\.0\.0\.1:\d+/)[0];

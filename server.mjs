@@ -4,8 +4,16 @@ import {createGzip} from 'node:zlib';
 import {stat,realpath,writeFile,mkdir} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
+import {handleStory,handleTts,handleConfig} from './functions/_shared/routes.mjs';
+import {asNode} from './functions/_shared/adapter.mjs';
 const root=fileURLToPath(new URL('./',import.meta.url));
 const port=Number(process.env.PORT||4193);
+// The same handlers Cloudflare runs, so `npm start` behaves like the deployed site and
+// tests/package.mjs can exercise the real routing offline. Keys come from the environment here
+// exactly as they do in the Worker - never from the page.
+const story=asNode(handleStory),tts=asNode(handleTts);
+const env={MINIMAX_KEY:process.env.MINIMAX_KEY||'',ANTHROPIC_KEY:process.env.ANTHROPIC_KEY||'',
+ QM_PROVIDER:process.env.QM_PROVIDER||'minimax',ORIGIN:`http://127.0.0.1:${port}`};
 const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json','.png':'image/png','.jpg':'image/jpeg','.webm':'video/webm','.glb':'model/gltf-binary','.gz':'application/gzip','.md':'text/plain; charset=utf-8'};
 const server=http.createServer(async(req,res)=>{
  try{
@@ -21,21 +29,22 @@ const server=http.createServer(async(req,res)=>{
    await mkdir(path.dirname(path.join(root,'evidence',capture[1])),{recursive:true});
    await writeFile(path.join(root,'evidence',capture[1]),data);res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({path:'evidence/'+capture[1],bytes}));return;
   }
-  // Dev-only egress for providers whose own CORS allowlist refuses the browser headers (MiniMax,
-  // probed 2026-10-04 - see CLAUDE.md). Same-origin, so no preflight exists at all. The upstream
-  // is pinned and only the auth header is forwarded: an open proxy would relay anything the page
-  // can reach. dist/ stays static - this route exists only here.
-  if(req.method==='POST'&&new URL(req.url,'http://localhost').pathname==='/proxy/minimax'){
-   const chunks=[];let bytes=0;for await(const chunk of req){bytes+=chunk.length;if(bytes>1024*1024){res.writeHead(413);res.end();return;}chunks.push(chunk);}
-   const ctl=new AbortController();req.on('close',()=>ctl.abort());
-   try{
-    const up=await fetch('https://api.minimax.cn/anthropic/v1/messages',{method:'POST',signal:ctl.signal,body:Buffer.concat(chunks),
-     headers:{'content-type':'application/json','authorization':String(req.headers.authorization||''),
-      'anthropic-version':String(req.headers['anthropic-version']||'2023-06-01')}});
-    res.writeHead(up.status,{'Content-Type':up.headers.get('content-type')||'application/json'});
-    res.end(Buffer.from(await up.arrayBuffer()));
-   }catch(e){if(!res.headersSent){res.writeHead(502);res.end(String(e?.message||'upstream'));}}
-   return;
+  // The model endpoints. These are the same handlers the Cloudflare Functions run (functions/api/),
+  // imported rather than reimplemented so local dev and production cannot drift. They used to be a
+  // dev-only /proxy/minimax that forwarded the VISITOR's key; the key now lives here, in the
+  // environment, and never crosses the wire to the page.
+  const api=new URL(req.url,'http://localhost').pathname;
+  if(api==='/api/config'&&req.method==='GET'){
+   const out=await handleConfig(req,env);
+   res.writeHead(out.status,out.headers);res.end(out.body);return;
+  }
+  if(api==='/api/story'&&req.method==='POST'){
+   const out=await story(req,env);
+   res.writeHead(out.status,out.headers);res.end(out.body);return;
+  }
+  if(api==='/api/tts'&&req.method==='POST'){
+   const out=await tts(req,env);
+   res.writeHead(out.status,out.headers);res.end(out.body);return;
   }
   if(!['GET','HEAD'].includes(req.method)){res.writeHead(405);res.end();return;}
   let name=decodeURIComponent(new URL(req.url,'http://localhost').pathname);
@@ -54,7 +63,10 @@ const server=http.createServer(async(req,res)=>{
   if(req.method==='HEAD'){res.writeHead(200,{...base,'Content-Length':s.size});res.end();return;}
   if(gz){res.writeHead(200,{...base,'Content-Encoding':'gzip','Vary':'Accept-Encoding'});createReadStream(target).on('error',()=>res.destroy()).pipe(createGzip()).pipe(res);}
   else{res.writeHead(200,{...base,'Content-Length':s.size});createReadStream(target).on('error',()=>res.destroy()).pipe(res);}
- }catch(e){res.writeHead(e.code==='ENOENT'?404:400);res.end('File not found or invalid path');}
+ }catch(e){
+  if(res.headersSent){console.error('server error after headers:',e);res.destroy();return;}
+  if(process.env.QM_DEBUG)console.error('server error:',e);
+  res.writeHead(e.code==='ENOENT'?404:400);res.end('File not found or invalid path');}
 }).listen(port,'127.0.0.1',()=>{
  console.log(`Three.js: http://127.0.0.1:${server.address().port}/`);
 
