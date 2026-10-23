@@ -45,8 +45,40 @@ jobs:
         run: |
           git lfs install
           git lfs pull --include="assets/Qingming_Details.glb,assets/Qingming_Vessels.glb,assets/Qingming_LOD.glb,assets/Qingming_Auto_Details.glb,public/runtime/city.soa.bin.gz"
-      - name: Test
-        run: npm test
+      # One step per test file, and not `npm test`. The npm script chains them with &&, so a failure
+      # is one red step with the reason buried in a log - and the log is not readable by anyone who
+      # is not an admin of the repository. A step per file names the failure in the job list, which
+      # is the difference between knowing what broke and going to look for it.
+      - name: test contracts
+        run: node tests/contracts.mjs
+      - name: test english
+        run: node tests/english.mjs
+      - name: test i18n
+        run: node tests/i18n.mjs
+      - name: test ai-story
+        run: node tests/ai-story.mjs
+      - name: test backend
+        run: node tests/backend.mjs
+      - name: test build-output
+        run: node tests/build-output.mjs
+      - name: test crowd-contracts
+        run: node tests/crowd-contracts.mjs
+      - name: test render-quality
+        run: node tests/render-quality.mjs
+      - name: test interaction
+        run: node tests/interaction.mjs
+      - name: test inspect-card
+        run: node tests/inspect-card.mjs
+      - name: test voice
+        run: node tests/voice.mjs
+      - name: test ambience
+        run: node tests/ambience.mjs
+      - name: test auto-batches
+        run: node tests/auto-batches.mjs
+      - name: test capture
+        run: node tests/capture.mjs
+      - name: test package
+        run: node tests/package.mjs
       - name: Build
         env:
           # The host that runs /api. The default is the Cloudflare Pages project that serves

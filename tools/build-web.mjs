@@ -7,6 +7,7 @@ const pages=process.argv.includes('--pages'),assetBase='https://qingming-assets.
 const city=JSON.parse(await readFile(new URL('public/runtime/city.json',root)));
 assert.equal(city.geometry.format,'soa-v1');
 const geometry=await readFile(new URL('public/runtime/'+city.geometry.file,root));
+const assets=JSON.parse(await readFile(new URL('production/asset-manifest.json',root)));
 const provenance=JSON.parse(await readFile(new URL('production/soa-manifest.json',root)));
 assert.equal(createHash('sha256').update(geometry).digest('hex'),provenance.derivedGzSha256,'Run git lfs pull: geometry must match the asset manifest');
 await rm(out,{recursive:true,force:true});
@@ -21,6 +22,11 @@ await mkdir(new URL('assets/',out));
 for(const name of ['Details','Vessels','LOD','Auto_Details']){
  const file='assets/Qingming_'+name+'.glb',bytes=await readFile(new URL(file,root));
  assert.equal(bytes.subarray(0,4).toString(),'glTF',file+': run git lfs pull');
+ // The hash of every asset the site ships, checked here rather than only in a test. A build that
+ // publishes is a build that verified what it published: the manifest is the record of what these
+ // files are supposed to be, and the deployment is the one moment that record has to hold.
+ assert.equal(createHash('sha256').update(bytes).digest('hex'),assets.outputs['Qingming_'+name+'.glb'],
+  file+': integrity against the asset manifest');
  assert(bytes.length<100*1024*1024,file+': exceeds deployment file limit');
  await writeFile(new URL(file,out),bytes);
 }

@@ -44,4 +44,11 @@ const needed=new Set([...app.matchAll(/'\.\.\/(tests\/[^']+\.js)'/g)].map(m=>m[1
 for(const file of [...needed])for(const m of (await read('tests/'+file)).matchAll(/from '\.\/([^']+\.js)'/g))needed.add(m[1]);
 assert(needed.size>=8,`the harnesses app.js loads: ${[...needed].join(', ')}`);
 for(const file of needed)assert(build.includes("'"+file+"'"),`${file} is loaded by the page and must be copied into the build`);
-console.log(`Build output: the page is edited for a public host, and ${needed.size} browser harnesses travel with it.`);
+
+// The workflow runs the suite one file per step, so that a failure names itself in the job list -
+// the log is not readable by anyone who is not an admin of the repository. That puts the list in two
+// places, and two places is how a test quietly stops running.
+const pkg=JSON.parse(await read('package.json')),workflow=await read('.github/workflows/pages.yml');
+for(const name of [...pkg.scripts.test.matchAll(/tests\/([a-z-]+)\.mjs/g)].map(m=>m[1]))
+ assert(workflow.includes('node tests/'+name+'.mjs'),`${name}.mjs is in npm test but not in the Pages workflow`);
+console.log(`Build output: the page is edited for a public host, ${needed.size} browser harnesses travel with it, and every test in npm test runs in CI.`);
