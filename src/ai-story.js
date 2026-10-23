@@ -34,14 +34,20 @@ import {sayLine} from './voice.js';
 // request now has a Function cold start in front of it as well as the model.
 const TIMEOUT_MS=45000;
 
-/** The same origin that served the page, and the only thing it talks to. Absolute vendor URLs are
- *  gone from this file entirely: a reader-supplied endpoint was how a browser-held key became an
- *  open relay, and there is nothing left for one to be. */
-const API='/api';
+/** Where the model endpoints are. The same origin that served the page is the default and the
+ *  normal case: the page and the functions are deployed together, and absolute vendor URLs are
+ *  gone from this file entirely - a reader-supplied endpoint was how a browser-held key became an
+ *  open relay, and there is nothing left for one to be.
+ *
+ *  A static host cannot run the functions - GitHub Pages has no server at all - so a build served
+ *  from one points this at the host that does, and that host's allowlist decides who may ask. The
+ *  reader still configures nothing: there is no field, no localStorage key and no credential on
+ *  the machine. QM_API is written by the build, not by the page. */
+const API=(globalThis.QM_API||'/api').replace(/\/+$/,'');
 
 /** The one request this module ever makes. JSON in, Response out; the caller checks res.ok and
- *  vets the body. Kept to fetch's defaults plus the content type - the endpoint is same-origin,
- *  so there is no credential and no CORS header to send. */
+ *  vets the body. Kept to fetch's defaults plus the content type - there is no credential and no
+ *  authorising header to send, and the origin that answers sends the CORS allowance itself. */
 const post=(path,body,signal)=>fetch(API+path,{method:'POST',signal,
  headers:{'content-type':'application/json','accept':'application/json'},body:JSON.stringify(body)});
 

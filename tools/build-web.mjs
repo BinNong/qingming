@@ -1,6 +1,7 @@
 import {cp, mkdir, readFile, rm, writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
+import {rewriteHtml} from './build-html.mjs';
 const root=new URL('../',import.meta.url),out=new URL('dist/',root);
 const pages=process.argv.includes('--pages'),assetBase='https://qingming-assets.bubucn.com/f628c4e/';
 const city=JSON.parse(await readFile(new URL('public/runtime/city.json',root)));
@@ -30,8 +31,20 @@ for(let offset=0;offset<geometry.length;offset+=32*1024*1024){
 }
 await writeFile(new URL('public/runtime/city.json',out),JSON.stringify(city));
 let html=await readFile(new URL('index.html',root),'utf8');
-// Local capture writes remain available through npm start; public hosting serves the scene only.
-html=html.replace('</head>','<style>.panel-bottom,#capture-suite,#export-status,#record{display:none!important}</style></head>');
+// Where the model endpoints are, when the page is not served by the host that runs them. GitHub
+// Pages has no server, so a build published there has to name the host that does - and that host's
+// allowlist decides who may ask. Unset, the page asks its own origin, which is the case for every
+// deployment that serves both halves together. The reader still configures nothing: this is
+// written by the build, and the only thing it carries is a base URL.
+html=rewriteHtml(html,{api:process.env.QM_API||''});
+// The in-browser harnesses. src/app.js loads them for ?verify=1 and the A/B flags, and they live
+// outside src/ - so without this the published site answers 404 for every harness URL, and the one
+// thing a public deployment cannot do is check itself. They are ~90 KB and import nothing the page
+// does not already load.
+await mkdir(new URL('tests/',out),{recursive:true});
+for(const file of ['quality-browser.js','optimization-browser.js','previous-QingmingPass.js','perfreview-browser.js',
+ 'perfreview-baseline.js','lod-browser.js','msaa-restore-browser.js','pass-profile.js','pixelratio-probe.js','performance.js'])
+ await cp(new URL('tests/'+file,root),new URL('tests/'+file,out));
 if(pages){
  for(const file of ['src/loader.js','src/scene-details.js']){
   const path=new URL(file,out);let replacements=0;

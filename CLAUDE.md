@@ -421,6 +421,33 @@ The controls sit at the top of the tools panel and **not** in `.toggles`: that g
 
 The test pins this against **ground truth** — a movement `(dx,dy)`, the heading the simulation derives from it, and the requirement that the forward vector equal the unit movement. The previous version related the three kinds to each other (`person == rot(boat, −2h)`), which expands to exactly the person branch: algebraically identical to its own definition, so it certified whatever the code said. Relations between branches cannot fail. Ground truth can, and did.
 
+## The public site
+
+GitHub Pages publishes the same `dist/` the other hosts do, and it is the only one of them anyone
+can reach without an account. Two facts shape everything about it.
+
+**A static host has no server, and the model endpoints are a server.** `functions/` holds the
+credential and spends money per request; GitHub cannot run it. So the page and the endpoints end up
+on two origins, and the endpoints have to be told to answer the second one. `ALLOWED_ORIGINS` is
+that list — off by default, an origin on it answered with the CORS headers a browser needs to read
+the reply at all, and `*` spelled as a *disable* because an allowlist of every origin is the check
+turned off. A cross-origin POST that is not on the list is refused **before the vendor is touched**:
+a rejected request has to cost nothing, and that refusal is the only thing standing between a page
+on another site and the operator's bill.
+
+**`QM_API` is the base URL of the endpoints, and the build writes it.** Not the reader: there is no
+field, no localStorage key and no credential on the machine. Unset, the page asks its own origin,
+which is the case for every deployment that serves both halves together.
+
+The refusal is not free of a subtlety. **A browser's same-origin GET sends no `Origin` header at
+all** — the header is added for every method except GET/HEAD — and `/api/config` is exactly that
+request. The old check refused it, so the config probe failed on every same-origin deployment and
+the page fell back to assuming its features were on. `Sec-Fetch-Site` is what separates a browser's
+GET from a script: the browser sends `same-origin`, curl sends nothing at all.
+
+The site is 345 MB and all of it is fetched on the first visit. That is the same payload the other
+hosts serve and it carries the same warning: desktop browsers and a fast connection.
+
 ## Working tree note
 
 The repo was last committed with a Cloudflare Pages deploy while `DEVELOPMENT.md` and `vercel.json` still describe Vercel. The LFS payloads are all fetched (`assets/Qingming_Current_City.glb` 188M, `public/runtime/city.bin.gz` 136M), so `tools/build-web.mjs` and `tests/package.mjs` can hash-verify them; if a checkout ever shows them as deleted, restore with `git lfs pull` / `git restore` rather than assuming a missing file is a real one — a pointer stub is ~130 bytes and still reads as "present".

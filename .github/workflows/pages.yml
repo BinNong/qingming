@@ -1,0 +1,71 @@
+# The city on GitHub Pages.
+#
+# A static host has no server, so this publishes the scene and nothing else. The model endpoints
+# stay on the host that can actually run them - named by the QM_API repository variable - and the
+# page asks that host for the CORS allowance its allowlist grants. Nothing here holds a credential,
+# and the built site contains no key, no vendor endpoint and no reader-facing setting for either.
+#
+# The site is 343 MB: four GLBs and the split geometry. That is why the assets are fetched from LFS
+# by hand rather than with `lfs: true`, and why the build is not a bundler step - there is no
+# bundler, and the runtime is served to the browser exactly as it is served from npm start.
+
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time. A second push supersedes the first rather than racing it, and the
+# superseded run stops spending minutes on a 343 MB artifact nobody will read.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # LFS is fetched by the step below, and only for the files the build reads. A blanket
+          # `lfs: true` pulls every LFS object in the repository - the Blender originals and the
+          # legacy city.bin.gz included - and GitHub's free LFS bandwidth is 10 GiB a month, so a
+          # build that fetched all of it would spend a seventh of the quota on one deploy.
+          lfs: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Fetch the runtime assets
+        run: |
+          git lfs install
+          git lfs pull --include="assets/Qingming_Details.glb,assets/Qingming_Vessels.glb,assets/Qingming_LOD.glb,assets/Qingming_Auto_Details.glb,public/runtime/city.soa.bin.gz"
+      - name: Test
+        run: npm test
+      - name: Build
+        env:
+          # The host that runs /api. The default is the Cloudflare Pages project that serves
+          # functions/; a repository variable overrides it if that host moves. Unset entirely, the
+          # page asks its own origin - which is the right answer for a deployment that serves both
+          # halves together, and the wrong one here: /api/config would land on GitHub's own 404.
+          QM_API: ${{ vars.QM_API || 'https://qingming-riverside.pages.dev/api' }}
+        run: npm run build
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

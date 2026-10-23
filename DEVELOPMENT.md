@@ -38,6 +38,30 @@ blender --background --factory-startup --python-exit-code 1 --python tests/auto-
 
 The independent Vercel project is `mike007jds-projects/qingming-riverside`, with Git LFS enabled, framework Other, `npm run build`, and output `dist`. Pushes to `main` build the site. A local production build can be checked with `vercel pull --environment=production` followed by `vercel build --prod`; deploy that checked output using `vercel deploy --prebuilt --prod`. Keep Vercel credentials in environment variables. Runtime assets remain large (about 345 MiB), so desktop browsers and a fast connection are recommended; this release does not claim stable 30 fps.
 
+## GitHub Pages
+
+The same `dist/` is what GitHub Pages publishes, and every URL in it is relative, so it serves unchanged from a project path such as `https://<user>.github.io/<repo>/`. `.github/workflows/pages.yml` builds and deploys it on every push to `main`, and does three things a naive workflow would not:
+
+- **It fetches the LFS assets by hand** — `git lfs pull --include=...` for the four GLBs and `public/runtime/city.soa.bin.gz` only. `lfs: true` on the checkout pulls every LFS object in the repository, the Blender originals and the legacy `city.bin.gz` included, which is 1.4 GB against a free allowance of 10 GiB a month.
+- **It runs the test suite first.** A public site that is wrong is worse than one that is late.
+- **It publishes the browser harnesses** into `dist/tests/`, because `src/app.js` loads them for `?verify=1` and the A/B flags and they live outside `src/`. A deployment that cannot check itself is a deployment nobody checks.
+
+Two settings have to be right, and neither is visible in the code:
+
+- **Settings → Pages → Source: GitHub Actions.**
+- **Settings → Secrets and variables → Actions → Variables → `QM_API`** — the absolute base of the host that runs `/api`, e.g. `https://qingming-riverside.pages.dev/api`. Unset, the page asks its own origin, which is right for a deployment serving the page and the functions together and wrong for a static one: `/api/config` would land on GitHub's own 404. The build writes it into the page as `globalThis.QM_API`; the reader never sees it and never sets it.
+
+**The model endpoints cannot move to GitHub Pages.** They hold the credential, they spend money, and GitHub Pages has no server. They stay on Cloudflare Pages Functions, which means the page and the endpoints are on two origins and the backend has to be told to answer the second one:
+
+```sh
+# Cloudflare Pages -> Settings -> Environment variables
+ALLOWED_ORIGINS=https://binnong.github.io
+```
+
+`ALLOWED_ORIGINS` is an allowlist, off by default, and an origin on it is answered with the CORS headers a browser needs to read the reply at all. `*` is the check OFF and is spelled as a disable for that reason. A cross-origin POST that is not on the list is refused before the vendor is touched, which is the whole point: a rejected request has to cost nothing.
+
+The same allowlist exists on the node path under the same name, so `HOST=0.0.0.0 ALLOWED_ORIGINS=https://binnong.github.io npm start` serves a page on another origin too.
+
 ## The model backend
 
 The generated portraits, the spoken line and the hawker cries are served by Cloudflare Pages Functions in `functions/`. The visitor configures nothing — there is no key input, no endpoint field and no provider picker, because the credential lives in the environment and never reaches the browser. `functions/api/` is a thin adapter; all the logic is in `functions/_shared/`, which `server.mjs` imports too, so `npm start` behaves like the deployed site and `tests/backend.mjs` exercises the real routing with no network and no key.

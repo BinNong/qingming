@@ -343,6 +343,19 @@ assert.equal(buildTts('x',{voiceId:'clever_boy'}).body.includes('model'),false,
 assert.equal(JSON.parse(buildTts('x',{voiceId:'v',lang:'en'}).body).lang,'en',
  'the language still crosses, so the server can pick language_boost without guessing');
 
+// The endpoint is configurable, because a static host cannot run the functions at all: the page can
+// live on one origin and the model endpoints on another. Unset, it is this origin - the case for
+// every deployment that serves both halves together. The query string gives a second, separately
+// evaluated copy of the module, which is what makes the other case testable at all.
+globalThis.QM_API='https://qingming-riverside.pages.dev/api';
+const {buildTts:buildTtsElsewhere}=await import('../src/tts.js?configured');
+assert.equal(buildTtsElsewhere('一句台词',{voiceId:'clever_boy',lang:'zh'}).url,
+ 'https://qingming-riverside.pages.dev/api/tts',
+ 'a build served from a static host asks the host that runs the functions');
+assert.deepEqual(Object.keys(buildTtsElsewhere('x',{voiceId:'v'}).headers).sort(),['content-type'],
+ 'and it still sends no credential - the key is on the server either way');
+delete globalThis.QM_API;
+
 // A 200 that is not the answer is the failure this file exists to prevent. An invalid voice_id comes
 // back as status_code 2013 inside a perfectly good HTTP response, so res.ok is not the check.
 assert.deepEqual([...parseTts(reply())],[0x49,0x44,0x33,0x04,0,0,0,0]);

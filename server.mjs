@@ -50,6 +50,18 @@ const server=http.createServer(async(req,res)=>{
   // dev-only /proxy/minimax that forwarded the VISITOR's key; the key now lives here, in the
   // environment, and never crosses the wire to the page.
   const api=new URL(req.url,'http://localhost').pathname;
+  // The preflight for a cross-origin caller. It carries no body and asks nothing of the model, so
+  // it is answered from the allowlist alone - and refused for an origin that is not on it, because
+  // a preflight that answers is a promise the POST would have to keep. The rule is the POST's own:
+  // a same-origin request never preflights, so a preflight only ever arrives from another site,
+  // and only an exposed server with that origin on the list may have it answered.
+  if(api.startsWith('/api/')&&req.method==='OPTIONS'){
+   const origin=req.headers.origin,list=env.ALLOWED_ORIGINS;
+   const ok=list.includes('*')||(env.EXPOSED&&list.includes(origin));
+   if(!origin||!ok){res.writeHead(403);res.end();return;}
+   res.writeHead(204,{'access-control-allow-origin':origin,'access-control-allow-methods':'GET, POST, OPTIONS',
+    'access-control-allow-headers':'content-type, accept','access-control-max-age':'86400','vary':'Origin'});
+   res.end();return;}
   if(api==='/api/config'&&req.method==='GET'){
    const out=await handleConfig(req,env);
    res.writeHead(out.status,out.headers);res.end(out.body);return;

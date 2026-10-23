@@ -16,7 +16,11 @@
 // 128kbps mp3. The model name is now the server's to choose; this constant stays because the clip
 // cache is keyed on it and a rename would silently orphan every cached clip in a live session.
 export const MODEL='speech-2.8-hd';
-const ENDPOINT='/api/tts';
+// The speech endpoint. Same-origin by default, and pointed elsewhere by a build served from a
+// static host - a host that cannot run the functions - exactly as ai-story.js does for the prose.
+// The reader never sees this and never sets it; the build writes it and the server's allowlist
+// decides who may answer.
+const ENDPOINT=(globalThis.QM_API||'/api').replace(/\/+$/,'')+'/tts';
 // A line is under twenty words and the whole synthesis measured under a second, so this only ever
 // fires on a network that has stopped delivering. Long enough not to give up on a cold connection.
 const TIMEOUT_MS=15000;

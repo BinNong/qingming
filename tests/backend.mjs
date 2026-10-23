@@ -143,6 +143,92 @@ assert.equal(r.status,400,'a 500-character "line" is bulk text-to-audio, not a p
 r=await call(handleStory,'/api/story',{facts:{role:'x'.repeat(MAX_BODY)},lang:'zh'});
 assert.equal(r.status,413,'a body past the cap never becomes a prompt');
 
+// --- The origin gate, on the Pages path. It used to be a fixed same-origin comparison, because the
+// page and the functions were always deployed together. A static host cannot run the functions at
+// all, so the page can now live on one origin and the model endpoints on another - which means the
+// gate has to be an allowlist rather than a comparison, and the refusal has to stay as cheap as it
+// was: a rejected cross-origin POST must not reach the vendor.
+//
+// The two halves of the answer are asserted separately, because they fail differently. The ALLOW
+// decides who may ask; the CORS headers decide whether the answer can be read at all. A gate that
+// allows without the headers spends the operator's key and hands the reply to a browser that
+// throws it away.
+const {asFunction,asNode}=await import('../functions/_shared/adapter.mjs');
+const echo=asFunction(async()=>({status:200,body:'{"ok":1}',headers:{'content-type':'application/json'}}));
+const call0=(request,env={})=>echo({request,env});
+const post0=(origin,env={})=>call0(new Request('https://site.example/api/story',{method:'POST',
+ headers:{'content-type':'application/json',origin},body:'{}'}),env);
+const pre0=(origin,env={})=>call0(new Request('https://site.example/api/story',{method:'OPTIONS',
+ headers:{origin,'access-control-request-method':'POST'}}),env);
+const ALLOW={ALLOWED_ORIGINS:'https://binnong.github.io'};
+
+// Same-origin, the case that has to keep working: the page and the functions on one origin.
+let g=await post0('https://site.example');
+assert.equal(g.status,200,'the page and the functions on one origin is the ordinary case');
+assert.equal(g.headers.get('access-control-allow-origin'),null,
+ 'a same-origin caller needs no allowance, and sending one only widens what a shared cache may keep');
+// Another site, with no allowlist: refused, and refused before the handler runs.
+g=await post0('https://evil.example');
+assert.equal(g.status,403,'a page on another site is refused');
+assert.equal((await g.json()).error,'forbidden');
+// The preflight for that same caller is refused too: answering it would be a promise the POST
+// would then break.
+g=await pre0('https://evil.example');
+assert.equal(g.status,403,'and its preflight is refused with it');
+
+// The allowlisted case: the static host's page, asking the host that runs the functions.
+g=await post0('https://binnong.github.io',ALLOW);
+assert.equal(g.status,200,'an origin on the allowlist may ask');
+assert.equal(g.headers.get('access-control-allow-origin'),'https://binnong.github.io',
+ 'and the allowance has to be echoed, or the browser throws the answer away');
+assert.match(String(g.headers.get('vary')),/Origin/i,'a cached reply differs by origin, and the cache has to know that');
+g=await pre0('https://binnong.github.io',ALLOW);
+assert.equal(g.status,204,'the preflight is answered for an allowlisted origin');
+assert.equal(g.headers.get('access-control-allow-origin'),'https://binnong.github.io');
+assert.match(String(g.headers.get('access-control-allow-headers')),/content-type/i,
+ 'the browser asks about content-type, and a preflight that does not permit it stops the POST');
+// The allowlist is a list. An origin not on it is still refused, in the same deployment.
+g=await post0('https://evil.example',ALLOW);
+assert.equal(g.status,403,'the allowlist is a list, not a switch');
+g=await pre0('https://evil.example',ALLOW);
+assert.equal(g.status,403,'and its preflight with it');
+
+// A browser's same-origin GET sends NO Origin header - the header is added for every method except
+// GET/HEAD - and /api/config is exactly that request. It used to be refused, which meant the
+// config probe failed on every same-origin deployment and the page assumed the features were on.
+// Sec-Fetch-Site is what separates that from a script.
+g=await call0(new Request('https://site.example/api/config',{headers:{'sec-fetch-site':'same-origin'}}));
+assert.equal(g.status,200,'a browser same-origin GET is the ordinary case, not a stranger');
+g=await call0(new Request('https://site.example/api/config'));
+assert.equal(g.status,403,'and a client with neither Origin nor Sec-Fetch-Site is still refused - curl included');
+// GET and HEAD only. A POST always carries Origin, so no browser request needs the Sec-Fetch-Site
+// path - and allowing one would let a script claim to be a browser by sending a header browsers
+// forbid scripts from setting, which is the difference between refusing a stranger and letting one
+// in. This one spends the operator's money, so it is the one that has to be right.
+g=await call0(new Request('https://site.example/api/story',{method:'POST',
+ headers:{'content-type':'application/json','sec-fetch-site':'same-origin'},body:'{}'}));
+assert.equal(g.status,403,'a POST that claims to be a browser by its Sec-Fetch-Site is refused');
+
+// The disable. `*` is this check OFF, not a very permissive list, and it is spelled as a disable
+// for exactly that reason.
+g=await post0('https://anywhere.example',{ALLOWED_ORIGINS:'*'});
+assert.equal(g.status,200,'ALLOW_ANY_ORIGIN is the check off');
+assert.equal(g.headers.get('access-control-allow-origin'),'https://anywhere.example',
+ 'and the answer names the origin that asked, not a wildcard');
+
+// The node path grants the same allowance, so a self-hosted backend can serve a page on another
+// origin exactly as the Cloudflare one does.
+const node=asNode(async()=>({status:200,body:'{}',headers:{'content-type':'application/json'}}));
+const mock=(headers)=>({url:'https://site.example/api/story',method:'POST',headers,
+ async*[Symbol.asyncIterator](){yield Buffer.from('{}');}});
+let n=await node(mock({origin:'https://binnong.github.io','content-type':'application/json'}),
+ {ALLOWED_ORIGINS:['https://binnong.github.io'],EXPOSED:true});
+assert.equal(n.status,200,'the node path grants the same cross-origin allowance');
+assert.equal(n.headers['access-control-allow-origin'],'https://binnong.github.io');
+n=await node(mock({origin:'https://evil.example','content-type':'application/json'}),
+ {ALLOWED_ORIGINS:['https://binnong.github.io'],EXPOSED:true});
+assert.equal(n.status,403,'and refuses an origin that is not on it');
+
 // --- The deployment. These are the two steps that turn this from a feature into a liability if
 // they are skipped, and neither is visible in the code, so they are asserted here where a change
 // to this file would prompt someone to re-read them.
