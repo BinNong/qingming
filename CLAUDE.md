@@ -445,6 +445,12 @@ request. The old check refused it, so the config probe failed on every same-orig
 the page fell back to assuming its features were on. `Sec-Fetch-Site` is what separates a browser's
 GET from a script: the browser sends `same-origin`, curl sends nothing at all.
 
+**The two are separate projects, and the reason is a name.** `qingming-riverside.pages.dev` belongs
+to another account, and a Pages subdomain is globally unique, so the backend this account owns is
+`qingming-riverside-aib.pages.dev` — Cloudflare's suffix, not a typo. The scroll is on GitHub
+Pages with its assets; the model endpoints are on the Pages project; the page asks them across
+origins, and the allowlist on that project is what says which origins it answers.
+
 The site is 345 MB and all of it is fetched on the first visit. That is the same payload the other
 hosts serve and it carries the same warning: desktop browsers and a fast connection.
 

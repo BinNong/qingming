@@ -83,16 +83,19 @@ wrangler pages secret put ALLOWED_ORIGINS    # e.g. https://binnong.github.io
 
 `ALLOWED_ORIGINS` is a comma-separated list, and `*` is the check OFF rather than a permissive list — the same name and the same meaning as on the node path, so `HOST=0.0.0.0 ALLOWED_ORIGINS=... npm start` behaves identically.
 
-### Uploading the pages site
+### Uploading the model backend
 
-The Pages project is not connected to a GitHub repository this account can push to, so the site is uploaded rather than built:
+The model endpoints are a Cloudflare Pages project of their own, separate from the site. GitHub Pages cannot run a function, so the page and the endpoints are on two origins, and this is what puts them there:
 
 ```sh
-npm run build:pages                                            # 1.8 MB: the shell only
-npx wrangler pages deploy dist --project-name qingming-riverside
+printf '%s' "$MINIMAX_KEY" | npx wrangler pages secret put MINIMAX_KEY --project-name qingming-riverside
+printf '%s' "https://binnong.github.io" | npx wrangler pages secret put ALLOWED_ORIGINS --project-name qingming-riverside
+npx wrangler pages deploy <a directory holding an index.html> --project-name qingming-riverside --branch main
 ```
 
-`build:pages` is the variant to use, and the reason is the asset host's **origin allowlist**: `qingming-assets.bubucn.com` echoes `access-control-allow-origin` for `https://qingming-riverside.pages.dev` and for nothing else. A page served from any other origin cannot read those assets at all — the browser refuses the response — so it has to ship them itself, which is what `npm run build` does. The two builds are not interchangeable, and the difference is invisible until a browser is involved.
+Run it from the repository root: the `functions/` directory beside it is what gets uploaded as the Worker, and the asset directory only needs the landing page. The project serves the three functions and that page; it does not serve the scroll, which is on GitHub Pages shipping its assets along with the page.
+
+Two things about the name, and both are why the site and the backend are two projects rather than one. `qingming-riverside.pages.dev` belongs to another account, so a project created here is given a suffix and lands on `qingming-riverside-aib.pages.dev` — Pages subdomains are globally unique. And the asset host `qingming-assets.bubucn.com` echoes `access-control-allow-origin` for the old origin and for nothing else, so the CDN-shell build (`npm run build:pages`) cannot be served from the new one: a page on an origin the host does not know cannot read those assets at all, and the browser refuses the response. The site therefore uses `npm run build`, which ships the assets with the page. The two builds are not interchangeable, and the difference is invisible until a browser is involved.
 
 Set `QM_PROVIDER` to `anthropic` or `minimax` (default). Neither key is committed, and `.dev.vars` is gitignored — `npm start` reads `MINIMAX_KEY` / `ANTHROPIC_KEY` straight from the environment.
 
