@@ -50,3 +50,9 @@ qm-*.png
 
 # Machine-local notes, one of which carries a login in plain text. Never commit.
 remote_server.md
+
+# Competition entries. They are filed elsewhere and are not part of the code, and the repository is
+# public - so they are ignored rather than merely left untracked, which is what stops the next
+# `git add -A` from picking them up.
+/参赛*.md
+/答辩*.html
