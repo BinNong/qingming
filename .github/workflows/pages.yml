@@ -81,11 +81,12 @@ jobs:
         run: node tests/package.mjs
       - name: Build
         env:
-          # The host that runs /api. The default is the Cloudflare Pages project that serves
-          # functions/; a repository variable overrides it if that host moves. Unset entirely, the
+          # The host that runs /api. It is a Cloudflare Pages project of its own, because GitHub
+          # Pages cannot run a function and the page and the endpoints are therefore on two
+          # origins. A repository variable overrides it if that host moves. Unset entirely, the
           # page asks its own origin - which is the right answer for a deployment that serves both
           # halves together, and the wrong one here: /api/config would land on GitHub's own 404.
-          QM_API: ${{ vars.QM_API || 'https://qingming-riverside.pages.dev/api' }}
+          QM_API: ${{ vars.QM_API || 'https://qingming-riverside-aib.pages.dev/api' }}
         run: npm run build
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
