@@ -59,8 +59,8 @@ export async function cachePut(env,body,json){
 // A direct connection to a server has no Cloudflare and no reverse proxy, so neither
 // cf-connecting-ip nor x-forwarded-for exists - and a limiter keyed on that empty string put the
 // entire network into ONE bucket. Twenty portraits anywhere on the LAN then locked out everybody,
-// which is not a rate limit, it is an outage: the first real use of the endpoint on 172.16.65.85
-// came back 429 for a user who had made exactly one request.
+// which is not a rate limit, it is an outage: the first real use of the endpoint came back 429
+// for a user who had made exactly one request.
 //
 // A counter that cannot identify its caller cannot ration against one. On Cloudflare, cf-connecting-ip
 // is present and the counter would have worked - which is exactly why it was kept for months without
