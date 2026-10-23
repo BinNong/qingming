@@ -54,30 +54,21 @@ export async function cachePut(env,body,json){
     'cache-control':'public, max-age=86400'}}));
  }catch(_){/* a failed cache write is a slower day, not a broken one */}}
 
-// --- 3. Per-isolate counter ----------------------------------------------------------------------
-// The Map is module-scope, which means it is per-isolate: not shared across PoPs, not durable, and
-// gone whenever the isolate recycles. That is exactly why this is labelled a nuisance guard.
-const SLIDING=new Map(),WINDOW_MS=60000,MAX_PER_WINDOW=20;
-
-export function rateLimited(ip,now){
- if(!ip)return false;
- const since=now-WINDOW_MS;
- const hits=(SLIDING.get(ip)||[]).filter(t=>t>since);
- hits.push(now);SLIDING.set(ip,hits);
- if(SLIDING.size>5000)for(const [k,v] of SLIDING)if(!v.some(t=>t>since))SLIDING.delete(k);
- return hits.length>MAX_PER_WINDOW;}
-
-// A cheap fixed window, so a burst cannot hide in the gaps of the sliding one above.
-const BURST=new Map(),BURST_MAX=5;
-export function burstLimited(ip,now){
- const n=(BURST.get(ip)||0)+1;BURST.set(ip,n);
- if(BURST.size>5000)BURST.clear();
- return n>BURST_MAX;}
-
-/** The caller's address. Cloudflare puts it in a header it strips from the request; behind another
- *  proxy the first value is a comma list and only the first entry is the client. */
-export const clientIp=request=>String(request.headers.get('cf-connecting-ip')||
- (String(request.headers.get('x-forwarded-for')||'').split(',')[0])||'').trim();
+// --- Rate limiting: removed ----------------------------------------------------------------------
+// There was a per-isolate counter here, and it was wrong in the one deployment shape that matters.
+// A direct connection to a server has no Cloudflare and no reverse proxy, so neither
+// cf-connecting-ip nor x-forwarded-for exists - and a limiter keyed on that empty string put the
+// entire network into ONE bucket. Twenty portraits anywhere on the LAN then locked out everybody,
+// which is not a rate limit, it is an outage: the first real use of the endpoint on 172.16.65.85
+// came back 429 for a user who had made exactly one request.
+//
+// A counter that cannot identify its caller cannot ration against one. On Cloudflare, cf-connecting-ip
+// is present and the counter would have worked - which is exactly why it was kept for months without
+// being wrong. Removing it rather than fixing it is the caller's decision: this deployment is an
+// internal demo, and a shared bucket that fails everyone is worse than no bucket at all.
+//
+// If this ever faces the internet, the control belongs in front of it (a Cloudflare WAF rule or a
+// reverse proxy), where the client address is actually known. Nothing here would do it.
 
 /** The most a client can send. The fact set is a few hundred bytes of scene labels; anything larger
  *  is not a portrait request, and refusing it before parsing is cheaper than refusing it after. */

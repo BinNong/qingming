@@ -65,6 +65,13 @@ const server=http.createServer(async(req,res)=>{
   if(!['GET','HEAD'].includes(req.method)){res.writeHead(405);res.end();return;}
   let name=decodeURIComponent(new URL(req.url,'http://localhost').pathname);
   if(name.endsWith('/'))name+='index.html';
+  // Never served, at any bind address. This is not about .gitignore: that governs what enters the
+  // repository, while this serves the WORKING DIRECTORY, so a machine-local file is just as
+  // readable as a tracked one. `.claude/` holds a live ANTHROPIC_AUTH_TOKEN in plaintext, and with
+  // HOST=0.0.0.0 any host on the network could have fetched it over HTTP. Gitignoring it protects
+  // the commit; this protects the process.
+  if(/(^|\/)\.(claude|git|env|dev\.vars|wrangler|vscode|idea)($|\/)|(^|\/)\.env|(^|\/)node_modules($|\/)|(^|\/)production($|\/)/.test(name)){
+   res.writeHead(403);res.end('Forbidden');return;}
   let target=path.resolve(root,'.'+name);
   if(!target.startsWith(root)){res.writeHead(403);res.end('Forbidden');return;}
   target=await realpath(target);
@@ -94,10 +101,13 @@ const server=http.createServer(async(req,res)=>{
  console.log(`Three.js: http://${shown}:${a.port}/`);
  if(host==='0.0.0.0'){
   if(env.MINIMAX_KEY||env.ANTHROPIC_KEY){
-   console.log(env.ALLOWED_ORIGINS.length?
-    `Model endpoints: ALLOWED_ORIGINS = ${env.ALLOWED_ORIGINS.join(', ')}`:
-    'Model endpoints: REFUSED - set ALLOWED_ORIGINS to the origin that serves the page, e.g. '
-    +'ALLOWED_ORIGINS=https://your.host');
+   if(env.ALLOWED_ORIGINS.includes('*'))
+    console.log('Model endpoints: OPEN - ALLOWED_ORIGINS=* disables the origin check. Anyone who can '
+     +'reach this address can spend the key.');
+   else if(env.ALLOWED_ORIGINS.length)
+    console.log(`Model endpoints: ALLOWED_ORIGINS = ${env.ALLOWED_ORIGINS.join(', ')}`);
+   else console.log('Model endpoints: REFUSED - set ALLOWED_ORIGINS to the origin that serves the page, '
+     +'e.g. ALLOWED_ORIGINS=https://your.host');
   }else console.log('Model endpoints: not configured (no key in the environment).');
  }
 }).on('error',e=>{console.error('Server failed:',e.message);process.exitCode=1;});

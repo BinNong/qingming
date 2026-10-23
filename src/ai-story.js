@@ -39,6 +39,12 @@ const TIMEOUT_MS=45000;
  *  open relay, and there is nothing left for one to be. */
 const API='/api';
 
+/** The one request this module ever makes. JSON in, Response out; the caller checks res.ok and
+ *  vets the body. Kept to fetch's defaults plus the content type - the endpoint is same-origin,
+ *  so there is no credential and no CORS header to send. */
+const post=(path,body,signal)=>fetch(API+path,{method:'POST',signal,
+ headers:{'content-type':'application/json','accept':'application/json'},body:JSON.stringify(body)});
+
 /** What this deployment can do. Asked once, at load, because the synthesised voice picker only
  *  means anything when the backend holds a TTS key - a list of vendor voice ids over an instance
  *  with no key is a control that cannot work.

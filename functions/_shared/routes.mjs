@@ -7,7 +7,7 @@
 
 import {buildMessages} from './prompt.mjs';
 import {pickProvider,buildRequest,callVendor,callTts,isConfigured,keyOf,PROVIDERS} from './vendor.mjs';
-import {cacheGet,cachePut,rateLimited,burstLimited,clientIp,readJson,validFacts,validLang,validVoice,validText} from './guard.mjs';
+import {cacheGet,cachePut,readJson,validFacts,validLang,validVoice,validText} from './guard.mjs';
 
 // The single exit for every handler. Serialises here so a caller on either side - a Web Response or
 // a node response - is handed a string and never has to know that. Nothing here is a credential
@@ -41,8 +41,6 @@ export async function handleStory(request,env,now=Date.now()){
  // Counted only past this point, and deliberately: a malformed request costs nothing, so letting it
  // consume the caller's quota would let anyone lock a real reader out of the feature by sending
  // them junk. What is limited is spending.
- const ip=clientIp(request);
- if(burstLimited(ip,now)||rateLimited(ip,now))return json({error:'slow down'},429,{'retry-after':'60'});
  const variant=Math.min(Math.max(0,Number(body.variant)||0),MAX_VARIANT);
 
  const cacheKey=JSON.stringify({f:body.facts,l:body.lang,v:variant});
@@ -78,8 +76,6 @@ export async function handleTts(request,env,now=Date.now()){
  if(!validVoice(body.voiceId))return json({error:'voice'},400);
  const voiceId=String(body.voiceId||'');
  // Past validation, same as above: only a request that would actually be synthesised is counted.
- const ip=clientIp(request);
- if(burstLimited(ip,now)||rateLimited(ip,now))return json({error:'slow down'},429,{'retry-after':'60'});
 
  // Speech is not cached: the client holds the clip (text+voice keyed, 24 clips / 4 MB LRU) and a
  // cache entry would pin a hex string nobody reads twice.

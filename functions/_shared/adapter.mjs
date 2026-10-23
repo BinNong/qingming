@@ -33,6 +33,12 @@ export const sameOrigin=request=>{
  *  request through to the vendor while the startup banner said REFUSED. The banner and the check
  *  have to read the same fact, and only the caller knows it. */
 export const originAllowed=(request,allowed=[],exposed=false)=>{
+ // ALLOW_ANY_ORIGIN is the "this is a throwaway server" switch. An allowlist of every origin is
+ // exactly this check disabled, so it is spelled as a disable rather than dressed up as a
+ // configuration - a reader who sees ALLOWED_ORIGINS=* in a config file should know it means "no
+ // check", not "a very permissive list". It still does not help against a curl, which sends any
+ // Origin it likes; nothing here ever has.
+ if(allowed.includes('*'))return true;
  const origin=request.headers.get('origin');
  if(!origin)return false;
  const host=request.headers.get('host')||new URL(request.url).host;

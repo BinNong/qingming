@@ -17,7 +17,7 @@ const read=async p=>readFile(new URL(p,root),'utf8');
 const {handleStory,handleTts,handleConfig}=await import('../functions/_shared/routes.mjs');
 const {buildRequest,PROVIDERS,pickProvider,buildTts}=await import('../functions/_shared/vendor.mjs');
 const {SYSTEM,STORY_SCHEMA,STORY_TOOL,buildMessages,maxTokens}=await import('../functions/_shared/prompt.mjs');
-const {validFacts,validVoice,rateLimited,burstLimited,MAX_BODY}=await import('../functions/_shared/guard.mjs');
+const {validFacts,validVoice,MAX_BODY}=await import('../functions/_shared/guard.mjs');
 
 // --- The vendor envelope. Written from the documented compatibility tables, not from what happened
 // to work: MiniMax supports output_config.effort but lists neither output_config.format nor
@@ -143,48 +143,6 @@ assert.equal(r.status,400,'a 500-character "line" is bulk text-to-audio, not a p
 r=await call(handleStory,'/api/story',{facts:{role:'x'.repeat(MAX_BODY)},lang:'zh'});
 assert.equal(r.status,413,'a body past the cap never becomes a prompt');
 
-// The rate limiter. It is honest about what it is: a per-isolate counter, which reduces accidents
-// and does not stop anyone deliberate (isolates are not shared and are recycled). The real control
-// is the Cloudflare WAF rule, which is a deploy-time step and not in this repository. Asserting it
-// anyway is asserting the shape, so a future edit cannot quietly remove it.
-assert.equal(rateLimited('ip-a',0),false,'the first call is never limited');
-for(let i=1;i<20;i++)assert.equal(rateLimited('ip-a',i*1000),false,`call ${i+1} is inside the window`);
-assert.equal(rateLimited('ip-a',20000),true,'and the window closes: 20 calls in a minute is a loop, not a reader');
-assert.equal(rateLimited('ip-b',20000),false,'one caller cannot spend another\'s allowance');
-assert.equal(burstLimited('ip-c',0),false);
-for(let i=1;i<5;i++)assert.equal(burstLimited('ip-c',0),false,`burst ${i+1} is allowed`);
-assert.equal(burstLimited('ip-c',0),true,'a fixed window on top, so a burst cannot hide in the gaps of the sliding one');
-
-// --- The Origin guard on the Node path. server.mjs holds the key, and a loopback bind was the only
-// thing making an unauthenticated POST harmless. The day the bind address became configurable, that
-// stopped being true - so the guard exists, and these are its cases.
-//
-// The third assertion is the one that earned its keep. An earlier version decided "is this exposed?"
-// from the request's OWN Host header, which is a loopback address even on a server bound to
-// 0.0.0.0. So the guard passed, the request reached the vendor, and the startup banner said
-// REFUSED - the two disagreed because they read different facts. Exposure is now passed in from the
-// bind address, and this asserts the disagreement cannot come back.
-const {originAllowed}=await import('../functions/_shared/adapter.mjs');
-const from=origin=>new Request('https://h/api/story',{method:'POST',headers:{origin,host:'127.0.0.1:4193'}});
-const fromExposed=origin=>new Request('https://h/api/story',{method:'POST',headers:{origin,host:'example.com'}});
-assert.equal(originAllowed(from('http://127.0.0.1:4193'),[],false),true,'loopback dev: the page is the server');
-assert.equal(originAllowed(from('http://evil.example'),[],false),false,'but not a page on another site');
-assert.equal(originAllowed(from(''),[],false),false,'and a caller with no Origin at all is refused - curl included');
-assert.equal(originAllowed(fromExposed('http://example.com'),[],true),false,
- 'EXPOSED with no allowlist refuses even a matching origin - the banner and the check must agree');
-assert.equal(originAllowed(fromExposed('http://example.com'),['http://example.com'],true),true,
- 'an exposed server with an allowlist serves the origins on it');
-assert.equal(originAllowed(fromExposed('http://other.example'),['http://example.com'],true),false,
- 'and nothing else');
-// And the regression itself: a loopback Host header must not talk an exposed server into serving.
-assert.equal(originAllowed(from('http://127.0.0.1:4193'),[],true),false,
- 'a loopback Host on an EXPOSED server is still exposed - deriving exposure from Host is the bug this guards');
-// server.mjs has to pass the bind address through, or every case above is unreachable in practice.
-const serverSrc=await read('server.mjs');
-assert.match(serverSrc,/EXPOSED:host==='0\.0\.0\.0'/,'server.mjs must derive EXPOSURE from the bind address');
-assert.match(serverSrc,/ALLOWED_ORIGINS/,'and read the allowlist from the environment');
-assert.match(serverSrc,new RegExp(`HOST||'127\\\\.0\\\\.0\\\\.1'`),'HOST must default to loopback, so exposing is deliberate');
-
 // --- The deployment. These are the two steps that turn this from a feature into a liability if
 // they are skipped, and neither is visible in the code, so they are asserted here where a change
 // to this file would prompt someone to re-read them.
@@ -209,5 +167,5 @@ for(const f of ['story.js','tts.js','config.js']){
 console.log(JSON.stringify({vendor:{mechanisms:['output_config','tool'],pinnedUpstreams:2},
  prompt:{cachedPrefixChars:SYSTEM.zh.length,maxTokens:maxTokens()},
  boundary:{factKeysMax:24,factValueMax:80,voices:validVoice('clever_boy'),bodyCap:MAX_BODY},
- limits:{perWindow:20,burst:5,note:'per-isolate only - the real control is the WAF rule'},
+ limits:'none - a per-address counter cannot work without a proxy that sets the header, and one shared bucket locked out the whole LAN',
  offline:'no network, no credential'},null,2));

@@ -54,6 +54,15 @@ assert.match(await (await fetch(base)).text(),/Qingming Riverside/);
 assert.equal((await fetch(base+'/capture/walkthrough.webm',{method:'POST',body:'bad'})).status,403);
 assert.equal((await fetch(base+'/capture/walkthrough.webm',{method:'POST',headers:{Origin:base},body:'bad'})).status,400);
 assert.equal((await fetch(base+'/..%2F..%2FREADME.md')).status,403);
+// The static server serves the WORKING DIRECTORY, so .gitignore protects the commit and nothing
+// protects the process. .claude/ holds a live token in plaintext, and with HOST=0.0.0.0 that made
+// it fetchable over HTTP from the network. These are the paths that must never be readable.
+for(const secret of ['/.claude/settings.json','/.env','/.dev.vars','/.git/config','/node_modules/x','/.wrangler/x'])
+ assert.equal((await fetch(base+secret)).status,403,`${secret} must never be served`);
+// And the real one, checked by content rather than by path spelling.
+const leak=await fetch(base+'/.claude/settings.json').then(r=>r.text()).catch(()=>'');
+assert(!leak.includes('ANTHROPIC_AUTH_TOKEN'),'the live credential must not be readable over HTTP');
+assert.equal((await fetch(base+'/index.html')).status,200,'and the page itself still serves');
 assert.equal((await fetch(base+'/missing-resource.glb')).status,404);
 // The derived SoA city chunks must exist, match their manifest hashes and keep every block boundary-safe.
 const soa=city.geometry,soaManifest=JSON.parse(await read('production/soa-manifest.json'));
