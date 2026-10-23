@@ -75,6 +75,25 @@ wrangler pages secret put ANTHROPIC_KEY   # optional: only if QM_PROVIDER=anthro
 
 Then configure a **Cloudflare WAF rate-limiting rule** on `/api/*` — 10 requests per minute per IP. This is the only control that stops one person running a loop from one address. The in-function limiter is per-isolate and shares nothing between PoPs; it reduces accidents and buys nothing against anyone deliberate. `tests/backend.mjs` asserts both steps are documented here, because a deploy-time step that is not written down is one that gets missed.
 
+**A third step is needed only when the page is served from another origin.** The functions are same-origin by default, which is right for a deployment that serves the page and the functions together. When the page is on GitHub Pages, the origin it is served from has to be on the allowlist, or every request is refused before the vendor is touched:
+
+```sh
+wrangler pages secret put ALLOWED_ORIGINS    # e.g. https://binnong.github.io
+```
+
+`ALLOWED_ORIGINS` is a comma-separated list, and `*` is the check OFF rather than a permissive list — the same name and the same meaning as on the node path, so `HOST=0.0.0.0 ALLOWED_ORIGINS=... npm start` behaves identically.
+
+### Uploading the pages site
+
+The Pages project is not connected to a GitHub repository this account can push to, so the site is uploaded rather than built:
+
+```sh
+npm run build:pages                                            # 1.8 MB: the shell only
+npx wrangler pages deploy dist --project-name qingming-riverside
+```
+
+`build:pages` is the variant to use, and the reason is the asset host's **origin allowlist**: `qingming-assets.bubucn.com` echoes `access-control-allow-origin` for `https://qingming-riverside.pages.dev` and for nothing else. A page served from any other origin cannot read those assets at all — the browser refuses the response — so it has to ship them itself, which is what `npm run build` does. The two builds are not interchangeable, and the difference is invisible until a browser is involved.
+
 Set `QM_PROVIDER` to `anthropic` or `minimax` (default). Neither key is committed, and `.dev.vars` is gitignored — `npm start` reads `MINIMAX_KEY` / `ANTHROPIC_KEY` straight from the environment.
 
 A `functions/` directory is deployed from the repository root and is **not** part of `dist/`, so the static build is unaffected by any of this.
